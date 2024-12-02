@@ -5,7 +5,7 @@
 #include "error.h"
 
 static uint8_t dfa(uint8_t state, uint8_t c) {
-  return dfa_table[state][c];
+  return (dfa_table[c] >> state) & 63;
 }
 
 static int ident_kind(char* start, int length) {
@@ -26,10 +26,7 @@ static int ident_kind(char* start, int length) {
 
 token_t lex(lexer_t* l) {
   while (isspace(*l->c )) {
-    if (*l->c == '\n') {
-      l->line++;
-    }
-
+    l->line += (*l->c == '\n');
     l->c++;
   }
 
@@ -54,6 +51,7 @@ token_t lex(lexer_t* l) {
     }
 
     state = next;
+    l->line += (*l->c == '\n');
     l->c++;
   }
 

@@ -8,7 +8,10 @@
 
 #include "base.h"
 
-#define MAX_STATES (1 << 7)
+// Shit based off
+// https://gist.github.com/pervognsen/218ea17743e1442e59bb60d29b1aa725
+
+#define MAX_STATES 10
 #define LEN(x) (sizeof(x)/sizeof((x)[0]))
 
 static char* keywords[] = {
@@ -171,25 +174,26 @@ int main(int argc, char** argv) {
 
   FILE* file = open_file_write(argv[1]);
 
-  fprintf(file, "static uint8_t dfa_table[%d][256] = {\n", _num_states);
+  fprintf(file, "static uint64_t dfa_table[256] = {\n");
 
-  for (int i = 0; i < _num_states; ++i) {
-    fprintf(file, "  [%d] = {", i);
+  for (int i = 0; i < 256; ++i) {
+    uint64_t word = 0;
 
-    for (int j = 0; j < 256; ++j) {
-      fprintf(file, "%d, ", dfa[i][j]);
+    for (int j = 0; j < _num_states; ++j) {
+      uint64_t x = dfa[j][i];
+      word |= (x * 6) << (j * 6);
     }
 
-    fprintf(file, "},\n");
+    fprintf(file, "  [%d] = %llu,\n", i, word);
   }
 
   fprintf(file, "};\n\n");
 
-  fprintf(file, "#define ACCEPT_CHAR %d\n", char_state);
-  fprintf(file, "#define ACCEPT_INT %d\n", int_state);
-  fprintf(file, "#define ACCEPT_IDENT %d\n", ident_state);
-  fprintf(file, "#define ACCEPT_STRING %d\n", string_end_state);
-  fprintf(file, "#define UNTERMINATED_STRING %d\n", string_state);
+  fprintf(file, "#define ACCEPT_CHAR %d\n", char_state * 6);
+  fprintf(file, "#define ACCEPT_INT %d\n", int_state * 6);
+  fprintf(file, "#define ACCEPT_IDENT %d\n", ident_state * 6);
+  fprintf(file, "#define ACCEPT_STRING %d\n", string_end_state * 6);
+  fprintf(file, "#define UNTERMINATED_STRING %d\n", string_state * 6);
   fprintf(file, "\n");
 
   uint64_t perfect_hash_multiplier = find_perfect_keyword_hash_multiplier();
