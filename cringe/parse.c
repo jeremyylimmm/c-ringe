@@ -82,6 +82,12 @@ static state_t state_block_stmt(token_t lbrace, int count) {
   };
 }
 
+static state_t state_return() {
+  return (state_t) {
+    .kind = STATE_RETURN
+  };
+}
+
 static state_t state_semi() {
   return (state_t) {
     .kind = STATE_SEMI,
@@ -233,13 +239,6 @@ static bool handle_BLOCK(parser_t* p, state_t state) {
 
 static bool handle_BLOCK_STMT(parser_t* p, state_t state) {
   switch (peek(p).kind) {
-    default: {
-      push(p, state_block_stmt(state.as.block_stmt.lbrace, state.as.block_stmt.count + 1));
-      push(p, state_semi());
-      push(p, state_expr());
-      return true;
-    }
-
     case TOKEN_EOF: {
       error(p, state.as.block_stmt.lbrace, "this brace has no closing brace");
       return false;
@@ -251,6 +250,39 @@ static bool handle_BLOCK_STMT(parser_t* p, state_t state) {
       return true;
     }
   }
+
+  push(p, state_block_stmt(state.as.block_stmt.lbrace, state.as.block_stmt.count + 1));
+
+  switch (peek(p).kind) {
+    default: {
+      push(p, state_semi());
+      push(p, state_expr());
+      return true;
+    }
+
+    case TOKEN_KEYWORD_RETURN: {
+      push(p, state_semi());
+      push(p, state_return());
+      return true;
+    }
+  }
+}
+
+static bool handle_RETURN(parser_t* p, state_t state) {
+  (void)state;
+
+  token_t return_token = peek(p);
+  REQUIRE(p, TOKEN_KEYWORD_RETURN, "expected a 'return' statement");
+
+  if (peek(p).kind != ';') {
+    push(p, state_complete(PARSE_NODE_RETURN, return_token, 1));
+    push(p, state_expr());
+  }
+  else {
+    node(p, PARSE_NODE_RETURN, return_token, 0);
+  }
+
+  return true;
 }
 
 static bool handle_SEMI(parser_t* p, state_t state) {
@@ -308,6 +340,8 @@ parse_tree_t* parse_unit(arena_t* arena, lexer_t* lexer) {
     tree->count = (int)vec_len(p.nodes);
     tree->nodes = vec_bake(arena, p.nodes);
     tree->tokens = vec_bake(arena, p.node_tokens);
+
+    assert(tree->nodes[tree->count-1].subtree_size == tree->count);
 
     return tree;
   }

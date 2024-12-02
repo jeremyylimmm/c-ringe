@@ -8,3 +8,5 @@ X(DIV, "div")
 
 X(BLOCK, "block")
 X(BLOCK_CLOSE, "block_close")
+
+X(RETURN, "return")
