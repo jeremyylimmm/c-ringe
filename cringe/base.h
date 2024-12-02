@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #define ARRAY_LENGTH(arr) ( sizeof(arr) / sizeof((arr)[0]) )
+#define foreach_list(ty, it, head) for (ty* it = head; it; it = it->next)
 
 typedef struct arena_t arena_t;
 

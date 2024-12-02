@@ -31,6 +31,13 @@ int main() {
   }
 
   dump_parse_tree(stdout, parse_tree);
+  sem_unit_t* sem_unit = check_unit(arena, path, source, parse_tree);
+
+  if (!sem_unit) {
+    return 1;
+  }
+
+  sem_dump_unit(stdout, sem_unit);
 
   return 0;
 }

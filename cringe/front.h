@@ -61,6 +61,44 @@ typedef struct {
   int index;
 } parse_child_iter_t;
 
+#define X(name, ...) SEM_INST_##name,
+typedef enum {
+  SEM_INST_UNINITIALIZED,
+  #include "sem_inst.def"
+} sem_inst_kind_t;
+#undef X
+
+#define SEM_MAX_INS 4
+
+typedef uint32_t sem_value_t;
+
+typedef struct {
+  sem_inst_kind_t kind;
+
+  sem_value_t ins[SEM_MAX_INS];
+  sem_value_t out;
+
+  void* data;
+} sem_inst_t;
+
+typedef struct sem_block_t sem_block_t;
+typedef struct sem_func_t sem_func_t;
+
+struct sem_block_t {
+  int temp_id;
+  sem_block_t* next;
+  vec_t(sem_inst_t) code;
+};
+
+struct sem_func_t {
+  sem_func_t* next;
+  sem_block_t* cfg;
+};
+
+typedef struct {
+  sem_func_t* funcs;
+} sem_unit_t;
+
 token_t lexer_next(lexer_t* l);
 
 void verror_at_char(char* path, char* source, int line, char* where, char* message, va_list ap);
@@ -77,3 +115,6 @@ bool _parse_children_condition(parse_child_iter_t* it);
 void _parse_children_next(parse_child_iter_t* it);
 
 #define foreach_parse_child(node, it) for (parse_child_iter_t it = _parse_children_begin(node); _parse_children_condition(&it); _parse_children_next(&it))
+
+sem_unit_t* check_unit(arena_t* arena, char* path, char* source, parse_tree_t* tree);
+void sem_dump_unit(FILE* stream, sem_unit_t* unit);
