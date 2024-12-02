@@ -24,9 +24,20 @@ static int ident_kind(char* start, int length) {
 }
 
 token_t lexer_next(lexer_t* l) {
-  while (isspace(*l->c )) {
-    l->line += (*l->c == '\n');
-    l->c++;
+  for (;;) {
+    while (isspace(*l->c )) {
+      l->line += (*l->c == '\n');
+      l->c++;
+    }
+
+    if (l->c[0] == '/' && l->c[1] == '/') {
+      while (*l->c != '\n' && *l->c != '\0') {
+        ++l->c;
+      }
+    }
+    else {
+      break;
+    }
   }
 
   if (*l->c == '\0') {
