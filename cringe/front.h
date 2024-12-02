@@ -68,6 +68,13 @@ typedef enum {
 } sem_inst_kind_t;
 #undef X
 
+#define X(name, label, ...) label,
+static char* sem_inst_kind_label[] = {
+  "<uninitialized>",
+  #include "sem_inst.def"
+};
+#undef X
+
 #define SEM_MAX_INS 4
 
 typedef uint32_t sem_value_t;
@@ -75,6 +82,7 @@ typedef uint32_t sem_value_t;
 typedef struct {
   sem_inst_kind_t kind;
 
+  int num_ins;
   sem_value_t ins[SEM_MAX_INS];
   sem_value_t out;
 
@@ -91,8 +99,12 @@ struct sem_block_t {
 };
 
 struct sem_func_t {
+  char* name;
   sem_func_t* next;
+
   sem_block_t* cfg;
+
+  sem_value_t next_value;
 };
 
 typedef struct {

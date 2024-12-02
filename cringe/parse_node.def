@@ -1,5 +1,6 @@
 
 X(INTEGER, "int")
+X(IDENTIFIER, "ident")
 
 X(ADD, "add")
 X(SUB, "sub")
@@ -9,7 +10,7 @@ X(DIV, "div")
 X(ASSIGN, "assign")
 
 X(BLOCK, "block")
-X(BLOCK_CLOSE, "block_close")
+X(BLOCK_OPEN, "block_open")
 
 X(RETURN, "return")
 X(IF, "if")
@@ -17,8 +18,10 @@ X(ELSE, "else")
 
 X(WHILE, "while")
 
-X(IDENTIFIER, "ident")
+X(LOCAL_NAME, "local_name")
 X(LOCAL_DECL, "local_decl")
 
 X(FUNCTION, "func")
+X(FUNCTION_INTRO, "function_intro")
+
 X(UNIT, "unit")

@@ -308,7 +308,8 @@ static bool handle_BLOCK(parser_t* p, state_t state) {
   token_t lbrace = peek(p);
   REQUIRE(p, '{', "expected a block '{'");
 
-  push(p, state_block_stmt(lbrace, 0));
+  node(p, PARSE_NODE_BLOCK_OPEN, lbrace, 0);
+  push(p, state_block_stmt(lbrace, 1));
 
   return true;
 }
@@ -321,8 +322,7 @@ static bool handle_BLOCK_STMT(parser_t* p, state_t state) {
     }
 
     case '}': {
-      node(p, PARSE_NODE_BLOCK_CLOSE, lex(p), 0);
-      node(p, PARSE_NODE_BLOCK, state.as.block_stmt.lbrace, state.as.block_stmt.count + 1);
+      node(p, PARSE_NODE_BLOCK, lex(p), state.as.block_stmt.count);
       return true;
     }
   }
@@ -488,8 +488,8 @@ static bool handle_LOCAL_DECL(parser_t* p, state_t state) {
 
   token_t name_tok = lex(p);
 
-  node(p, PARSE_NODE_IDENTIFIER, name_tok, 0);
-  node(p, PARSE_NODE_LOCAL_DECL, ty, 1);
+  node(p, PARSE_NODE_LOCAL_DECL, ty, 0);
+  node(p, PARSE_NODE_LOCAL_NAME, name_tok, 1);
 
   return true;
 }
@@ -526,8 +526,9 @@ static bool handle_FUNCTION(parser_t* p, state_t state) {
 
   lex(p);
 
+  node(p, PARSE_NODE_FUNCTION_INTRO, ty, 0);
   node(p, PARSE_NODE_IDENTIFIER, name, 0);
-  push(p, state_complete(PARSE_NODE_FUNCTION, ty, 2));
+  push(p, state_complete(PARSE_NODE_FUNCTION, ty, 3));
   push(p, state_block());
 
   return true;

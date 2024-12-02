@@ -4,3 +4,11 @@ X(ADD, "add")
 X(SUB, "sub")
 X(MUL, "mul")
 X(DIV, "div")
+
+X(STORE, "store")
+
+X(RETURN, "return")
+
+X(BULLSHIT, "bullshit")
+
+X(ALLOCA, "alloca")
