@@ -59,6 +59,8 @@ size_t _vec_pop(void* v);
 
 void* _vec_bake(arena_t* arena, void* v, size_t stride);
 
+void vec_clear(void* v);
+
 #define _vec_lval(v) (*(void**)(&(v)))
 #define vec_put(v, x) ( _vec_lval(v) = _vec_put(v, sizeof((v)[0])), (v)[vec_len(v)-1] = (x), (void)0 )
 #define vec_bake(arena, v) ( _vec_lval(v) = _vec_bake(arena, v, sizeof((v)[0])), (v) )

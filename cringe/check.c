@@ -184,20 +184,18 @@ static bool check_function(checker_t* c) {
 
   bool success = true;
 
-  parse_node_t* name = &c->tree->nodes[c->i++];
-  assert(name->kind == PARSE_NODE_IDENTIFIER);
-
   c->cur_func = c->cur_func->next = arena_type(c->arena, sem_func_t);
-  c->cur_func->name = token_to_string(c, get_token(c, name));
   c->cur_func->next_value = 1;
+
+  // Reset the checker
+  c->cur_block = NULL;
+  vec_clear(c->value_stack);
+
+  new_block(c);
+  c->cur_func->cfg = c->cur_block;
 
   c->i++; // lbrace
   c->brace_depth = 1;
-
-  c->cur_block = NULL;
-  new_block(c);
-
-  c->cur_func->cfg = c->cur_block;
 
   while (c->brace_depth > 0) {
     parse_node_t* node = &c->tree->nodes[c->i++];
@@ -217,7 +215,10 @@ static bool check_function(checker_t* c) {
     success &= result;
   }
 
-  c->i++; // function
+  parse_node_t* name = &c->tree->nodes[c->i++];
+  assert(name->kind == PARSE_NODE_FUNCTION);
+
+  c->cur_func->name = token_to_string(c, get_token(c, name));
 
   return success;
 }

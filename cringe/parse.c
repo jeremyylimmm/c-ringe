@@ -527,8 +527,7 @@ static bool handle_FUNCTION(parser_t* p, state_t state) {
   lex(p);
 
   node(p, PARSE_NODE_FUNCTION_INTRO, ty, 0);
-  node(p, PARSE_NODE_IDENTIFIER, name, 0);
-  push(p, state_complete(PARSE_NODE_FUNCTION, ty, 3));
+  push(p, state_complete(PARSE_NODE_FUNCTION, name, 2));
   push(p, state_block());
 
   return true;
