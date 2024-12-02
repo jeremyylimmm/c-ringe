@@ -15,6 +15,7 @@ typedef struct {
     struct { token_t if_tok; token_t lparen; } if_body;
     struct { token_t if_tok; } _else;
     struct { token_t while_tok; token_t lparen; } while_body;
+    struct { int count; } top_level;
   } as;
 } state_t;
 
@@ -150,6 +151,19 @@ static state_t state_while_body(token_t while_tok, token_t lparen) {
 static state_t state_local_decl() {
   return (state_t) {
     .kind = STATE_LOCAL_DECL
+  };
+}
+
+static state_t state_function() {
+  return (state_t) {
+    .kind = STATE_FUNCTION
+  };
+}
+
+static state_t state_top_level(int count) {
+  return (state_t) {
+    .kind = STATE_TOP_LEVEL,
+    .as.top_level.count = count
   };
 }
 
@@ -467,7 +481,6 @@ static bool handle_LOCAL_DECL(parser_t* p, state_t state) {
 
   token_t ty = lex(p);
 
-
   if (peek(p).kind != TOKEN_IDENTIFIER) {
     error(p, ty, "a local declaration requires that a name to follow this type");
     return false;
@@ -481,6 +494,56 @@ static bool handle_LOCAL_DECL(parser_t* p, state_t state) {
   return true;
 }
 
+static bool handle_FUNCTION(parser_t* p, state_t state) {
+  (void)state;
+
+  switch (peek(p).kind) {
+    default:
+      error(p, peek(p), "expected a function: eg. void foo() {}");
+      return false;
+
+    case TOKEN_KEYWORD_INT:
+    case TOKEN_KEYWORD_VOID:
+      break;
+  }
+
+  token_t ty = lex(p);
+
+  if (peek(p).kind != TOKEN_IDENTIFIER) {
+    error(p, ty, "a function definition/declaration requires that a name follow this type");
+    return false;
+  }
+
+  token_t name = lex(p);
+
+  token_t lparen = peek(p);
+  REQUIRE(p, '(', "expected a parameter list");
+
+  if (peek(p).kind != ')') {
+    error(p, lparen, "no closing ')'");
+    return false;
+  }
+
+  lex(p);
+
+  node(p, PARSE_NODE_IDENTIFIER, name, 0);
+  push(p, state_complete(PARSE_NODE_FUNCTION, ty, 2));
+  push(p, state_block());
+
+  return true;
+}
+
+static bool handle_TOP_LEVEL(parser_t* p, state_t state) {
+  if (peek(p).kind == TOKEN_EOF) {
+    node(p, PARSE_NODE_UNIT, peek(p), state.as.top_level.count);
+    return true;
+  }
+
+  push(p, state_top_level(state.as.top_level.count + 1));
+  push(p, state_function());
+  return true;
+}
+
 parse_tree_t* parse_unit(arena_t* arena, lexer_t* lexer) {
   parser_t p = {
     .lexer = lexer
@@ -488,7 +551,7 @@ parse_tree_t* parse_unit(arena_t* arena, lexer_t* lexer) {
 
   bool success = false;
 
-  push(&p, state_block());
+  push(&p, state_top_level(0));
 
   while (vec_len(p.stack)) {
     state_t state = vec_pop(p.stack);

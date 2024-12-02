@@ -19,3 +19,6 @@ X(WHILE, "while")
 
 X(IDENTIFIER, "ident")
 X(LOCAL_DECL, "local_decl")
+
+X(FUNCTION, "func")
+X(UNIT, "unit")
