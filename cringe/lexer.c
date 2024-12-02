@@ -2,6 +2,7 @@
 
 #include "lexer.h"
 #include "dfa.h"
+#include "error.h"
 
 static uint8_t dfa(uint8_t state, uint8_t c) {
   return dfa_table[state][c];
@@ -69,6 +70,15 @@ token_t lex(lexer_t* l) {
 
     case ACCEPT_IDENT:
       kind = ident_kind(start, (int)(l->c - start));
+      break;
+
+    case ACCEPT_STRING:
+      kind = TOKEN_STRING;
+      break;
+
+    case UNTERMINATED_STRING:
+      error_at_char(l->path, l->source, line, start, "unterminated string");
+      kind = TOKEN_ERROR;
       break;
 
     default:

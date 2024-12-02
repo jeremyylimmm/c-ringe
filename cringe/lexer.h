@@ -11,12 +11,16 @@ typedef struct {
 } token_t;
 
 typedef struct {
+  char* source;
+  char* path;
   char* c;
   int line;
 } lexer_t;
 
-inline lexer_t lexer_init(char* source) {
+inline lexer_t lexer_init(char* path, char* source) {
   return (lexer_t) {
+    .source = source,
+    .path = path,
     .c = source,
     .line = 1
   };

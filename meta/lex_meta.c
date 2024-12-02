@@ -151,6 +151,21 @@ int main(int argc, char** argv) {
       dfa[int_state][i] = 0;
     }
   }
+  
+  // String
+
+  uint8_t string_state = new_state();
+  uint8_t string_end_state = new_state();
+
+  dfa[0]['"'] = string_state;
+
+  for (int i = 0; i < 256; ++i) {
+    dfa[string_state][i] = string_state;
+    dfa[string_end_state][i] = 0;
+  }
+
+  dfa[string_state]['"'] = string_end_state;
+  dfa[string_state]['\0'] = 0;
 
   // Write the table
 
@@ -173,6 +188,8 @@ int main(int argc, char** argv) {
   fprintf(file, "#define ACCEPT_CHAR %d\n", char_state);
   fprintf(file, "#define ACCEPT_INT %d\n", int_state);
   fprintf(file, "#define ACCEPT_IDENT %d\n", ident_state);
+  fprintf(file, "#define ACCEPT_STRING %d\n", string_end_state);
+  fprintf(file, "#define UNTERMINATED_STRING %d\n", string_state);
   fprintf(file, "\n");
 
   uint64_t perfect_hash_multiplier = find_perfect_keyword_hash_multiplier();
@@ -211,8 +228,10 @@ int main(int argc, char** argv) {
 
   fprintf(file, "enum {\n");
   fprintf(file, "  TOKEN_EOF = 0,\n");
-  fprintf(file, "  TOKEN_INTEGER = 256,\n");
+  fprintf(file, "  TOKEN_ERROR = 256,\n");
+  fprintf(file, "  TOKEN_INTEGER,\n");
   fprintf(file, "  TOKEN_IDENTIFIER,\n");
+  fprintf(file, "  TOKEN_STRING,\n");
 
   for (int i = 0; i < LEN(keywords); ++i) {
     fprintf(file, "  TOKEN_KEYWORD_");

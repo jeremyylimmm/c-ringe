@@ -6,7 +6,7 @@
 int main() {
   arena_t* arena = os_new_arena();
 
-  const char* path = "meta/dfa.c";
+  char* path = "examples/test.c";
 
   FILE* file; 
   if (fopen_s(&file, path, "r")) {
@@ -22,7 +22,7 @@ int main() {
   size_t source_length = fread(source, 1, file_length, file);
   source[source_length] = '\0';
 
-  lexer_t lexer = lexer_init(source);
+  lexer_t lexer = lexer_init(path, source);
 
   for (;;) {
     token_t token = lex(&lexer);
