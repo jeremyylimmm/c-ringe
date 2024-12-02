@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <threads.h>
 
 #include "base.h"
 
@@ -16,7 +17,9 @@ struct arena_t {
   size_t allocated;
 };
 
-arena_t* os_new_arena() {
+thread_local arena_t* scratch_arenas[2];
+
+arena_t* new_arena() {
   arena_t* arena = LocalAlloc(LMEM_ZEROINIT, sizeof(arena_t));
 
   SYSTEM_INFO system_info;
@@ -36,9 +39,62 @@ arena_t* os_new_arena() {
   return arena;
 }
 
-void os_free_arena(arena_t* arena) {
+void free_arena(arena_t* arena) {
   VirtualFree(arena->base, 0, MEM_RELEASE);
   LocalFree(arena);
+}
+
+void init_globals() {
+  for (int i = 0; i < ARRAY_LENGTH(scratch_arenas); ++i) {
+    scratch_arenas[i] = new_arena();
+  }
+}
+
+void free_globals() {
+  for (int i = 0; i < ARRAY_LENGTH(scratch_arenas); ++i) {
+    free_arena(scratch_arenas[i]);
+  }
+}
+
+scratch_t scratch_get(int conflict_count, arena_t** conflicts) {
+  assert(conflict_count < ARRAY_LENGTH(scratch_arenas));
+
+  for (int i = 0; i < ARRAY_LENGTH(scratch_arenas); ++i) {
+    arena_t* arena = scratch_arenas[i];
+    assert(arena && "globals not initialized for thread");
+
+    bool any_conflict = false;
+
+    for (int j = 0; !any_conflict && j < conflict_count; ++j) {
+      if (arena == conflicts[j]) {
+        any_conflict = true;
+      }
+    }
+
+    if (!any_conflict) {
+      return (scratch_t) {
+        .arena = arena,
+        .impl = (void*)arena->allocated,
+      };
+    }
+  }
+
+  assert(false);
+  return (scratch_t) {0};
+}
+
+void scratch_release(scratch_t* scratch) {
+  size_t save = (size_t)scratch->impl;
+  arena_t* arena = scratch->arena;
+
+  assert(save <= arena->allocated);
+
+#if _DEBUG
+  memset(ptr_byte_add(arena->base, save), 0, arena->allocated - save);
+  memset(scratch, 0, sizeof(*scratch));
+#endif
+
+  arena->allocated = save;
 }
 
 void* arena_push(arena_t* arena, size_t amount) {

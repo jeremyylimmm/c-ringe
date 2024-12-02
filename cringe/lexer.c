@@ -1,8 +1,7 @@
 #include <ctype.h>
 
-#include "lexer.h"
+#include "front.h"
 #include "dfa.h"
-#include "error.h"
 
 static uint8_t dfa(uint8_t state, uint8_t c) {
   return (dfa_table[c] >> state) & 63;
@@ -24,7 +23,7 @@ static int ident_kind(char* start, int length) {
   return TOKEN_IDENTIFIER;
 }
 
-token_t lex(lexer_t* l) {
+token_t lexer_next(lexer_t* l) {
   while (isspace(*l->c )) {
     l->line += (*l->c == '\n');
     l->c++;

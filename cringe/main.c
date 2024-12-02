@@ -1,10 +1,11 @@
 #include <stdio.h>
 
 #include "base.h"
-#include "lexer.h"
+#include "front.h"
 
 int main() {
-  arena_t* arena = os_new_arena();
+  init_globals();
+  arena_t* arena = new_arena();
 
   char* path = "examples/test.c";
 
@@ -23,16 +24,13 @@ int main() {
   source[source_length] = '\0';
 
   lexer_t lexer = lexer_init(path, source);
+  parse_tree_t* parse_tree = parse_unit(arena, &lexer);
 
-  for (;;) {
-    token_t token = lex(&lexer);
-
-    printf("<%d(%d): '%.*s'>\n", token.kind, token.line, token.length, token.start);
-
-    if (token.kind == TOKEN_EOF) {
-      break;
-    }
+  if (!parse_tree) {
+    return 1;
   }
+
+  dump_parse_tree(stdout, parse_tree);
 
   return 0;
 }

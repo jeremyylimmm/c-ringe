@@ -1,7 +1,7 @@
 #include <ctype.h>
 #include <stdio.h>
 
-#include "error.h"
+#include "front.h"
 
 void verror_at_char(char* path, char* source, int line, char* where, char* message, va_list ap) {
   char* line_start = where;
@@ -35,6 +35,19 @@ void error_at_char(char* path, char* source, int line, char* where, char* messag
   va_start(ap, message);
 
   verror_at_char(path, source, line, where, message, ap);
+
+  va_end(ap);
+}
+
+void verror_at_token(char* path, char* source, token_t token, char* message, va_list ap) {
+  verror_at_char(path, source, token.line, token.start, message, ap);
+}
+
+void error_at_token(char* path, char* source, token_t token, char* message, ...){
+  va_list ap;
+  va_start(ap, message);
+
+  verror_at_token(path, source, token, message, ap);
 
   va_end(ap);
 }
