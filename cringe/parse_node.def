@@ -13,7 +13,10 @@ X(BLOCK, "block")
 X(BLOCK_OPEN, "block_open")
 
 X(RETURN, "return")
+
+X(IF_INTRO, "if_intro")
 X(IF, "if")
+
 X(ELSE, "else")
 
 X(WHILE, "while")
@@ -22,6 +25,6 @@ X(LOCAL_NAME, "local_name")
 X(LOCAL_DECL, "local_decl")
 
 X(FUNCTION, "func")
-X(FUNCTION_INTRO, "function_intro")
+X(FUNCTION_INTRO, "func_intro")
 
 X(UNIT, "unit")

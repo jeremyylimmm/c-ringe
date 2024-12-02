@@ -12,8 +12,8 @@ typedef struct {
     struct { int prec; } binary;
     struct { parse_node_kind_t kind; token_t token; int children_count; } complete;
     struct { token_t lbrace; int count; } block_stmt;
-    struct { token_t if_tok; token_t lparen; } if_body;
-    struct { token_t if_tok; } _else;
+    struct { token_t lparen; } if_body;
+    struct { token_t lparen; } _else;
     struct { token_t while_tok; token_t lparen; } while_body;
     struct { int count; } top_level;
   } as;
@@ -119,18 +119,17 @@ static state_t state_if() {
   };
 }
 
-static state_t state_if_body(token_t if_tok, token_t lparen) {
+static state_t state_if_body(token_t lparen) {
   return (state_t) {
     .kind = STATE_IF_BODY,
-    .as.if_body.if_tok = if_tok,
     .as.if_body.lparen = lparen
   };
 }
 
-static state_t state_else(token_t if_tok) {
+static state_t state_else(token_t lparen) {
   return (state_t) {
     .kind = STATE_ELSE,
-    .as._else.if_tok = if_tok,
+    .as._else.lparen = lparen,
   };
 }
 
@@ -405,7 +404,8 @@ static bool handle_IF(parser_t* p, state_t state) {
   token_t lparen = peek(p);
   REQUIRE(p, '(', "if statement needs an expression: 'if (expr)'");
 
-  push(p, state_if_body(if_tok, lparen));
+  node(p, PARSE_NODE_IF_INTRO, if_tok, 0);
+  push(p, state_if_body(lparen));
   push(p, state_expr());
 
   return true;
@@ -419,7 +419,7 @@ static bool handle_IF_BODY(parser_t* p, state_t state) {
 
   lex(p);
 
-  push(p, state_else(state.as.if_body.if_tok));
+  push(p, state_else(state.as.if_body.lparen));
   push(p, state_stmt());
 
   return true;
@@ -428,11 +428,11 @@ static bool handle_IF_BODY(parser_t* p, state_t state) {
 static bool handle_ELSE(parser_t* p, state_t state) {
   if (peek(p).kind == TOKEN_KEYWORD_ELSE) {
     node(p, PARSE_NODE_ELSE, lex(p), 0);
-    push(p, state_complete(PARSE_NODE_IF, state.as._else.if_tok, 4));
+    push(p, state_complete(PARSE_NODE_IF, state.as._else.lparen, 5));
     push(p, state_stmt());
   }
   else {
-    node(p, PARSE_NODE_IF, state.as._else.if_tok, 2);
+    node(p, PARSE_NODE_IF, state.as._else.lparen, 3);
   }
 
   return true;
