@@ -11,6 +11,7 @@ typedef struct {
   union {
     struct { int prec; } binary;
     struct { parse_node_kind_t kind; token_t token; int children_count; } complete;
+    struct { token_t lbrace; int count; } block_stmt;
   } as;
 } state_t;
 
@@ -67,6 +68,26 @@ static state_t state_expr() {
   };
 }
 
+static state_t state_block() {
+  return (state_t) {
+    .kind = STATE_BLOCK
+  };
+}
+
+static state_t state_block_stmt(token_t lbrace, int count) {
+  return (state_t) {
+    .kind = STATE_BLOCK_STMT,
+    .as.block_stmt.count = count,
+    .as.block_stmt.lbrace = lbrace
+  };
+}
+
+static state_t state_semi() {
+  return (state_t) {
+    .kind = STATE_SEMI,
+  };
+}
+
 static state_t state_complete(parse_node_kind_t kind, token_t token, int children_count) {
   return (state_t) {
     .kind = STATE_COMPLETE,
@@ -110,6 +131,25 @@ static void error(parser_t* p, token_t token, char* message, ...) {
 
   va_end(ap);
 }
+
+static bool match(parser_t* p, int token_kind, char* message) {
+  token_t token = peek(p);
+
+  if (token.kind == token_kind) {
+    lex(p);
+    return true;
+  }
+
+  error(p, token, message);
+  return false;
+}
+
+#define REQUIRE(p, token_kind, message) \
+  do { \
+    if (!match(p, token_kind, message)) { \
+      return false; \
+    } \
+  } while (false)
 
 static bool handle_PRIMARY(parser_t* p, state_t state) {
   (void)state;
@@ -180,6 +220,45 @@ static bool handle_EXPR(parser_t* p, state_t state) {
   return true;
 }
 
+static bool handle_BLOCK(parser_t* p, state_t state) {
+  (void)state;
+
+  token_t lbrace = peek(p);
+  REQUIRE(p, '{', "expected a block '{'");
+
+  push(p, state_block_stmt(lbrace, 0));
+
+  return true;
+}
+
+static bool handle_BLOCK_STMT(parser_t* p, state_t state) {
+  switch (peek(p).kind) {
+    default: {
+      push(p, state_block_stmt(state.as.block_stmt.lbrace, state.as.block_stmt.count + 1));
+      push(p, state_semi());
+      push(p, state_expr());
+      return true;
+    }
+
+    case TOKEN_EOF: {
+      error(p, state.as.block_stmt.lbrace, "this brace has no closing brace");
+      return false;
+    }
+
+    case '}': {
+      node(p, PARSE_NODE_BLOCK_CLOSE, lex(p), 0);
+      node(p, PARSE_NODE_BLOCK, state.as.block_stmt.lbrace, state.as.block_stmt.count + 1);
+      return true;
+    }
+  }
+}
+
+static bool handle_SEMI(parser_t* p, state_t state) {
+  (void)state;
+  REQUIRE(p, ';', "malformed statement: consider adding a ';' before");
+  return true;
+}
+
 static bool handle_COMPLETE(parser_t* p, state_t state) {
   node(p, state.as.complete.kind, state.as.complete.token, state.as.complete.children_count);
   return true;
@@ -192,7 +271,7 @@ parse_tree_t* parse_unit(arena_t* arena, lexer_t* lexer) {
 
   bool success = false;
 
-  push(&p, state_expr());
+  push(&p, state_block());
 
   while (vec_len(p.stack)) {
     state_t state = vec_pop(p.stack);

@@ -5,3 +5,6 @@ X(ADD, "add")
 X(SUB, "sub")
 X(MUL, "mul")
 X(DIV, "div")
+
+X(BLOCK, "block")
+X(BLOCK_CLOSE, "block_close")
