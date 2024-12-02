@@ -13,15 +13,15 @@ set(CMAKE_C_STANDARD_REQUIRED True)
 
 file(MAKE_DIRECTORY "generated")
 
-add_executable(dfa "meta/dfa.c")
+add_executable(lex_meta "meta/lex_meta.c")
 
 set(DFA_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/dfa.h)
 set(TOKEN_KIND_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/token_kind.h)
 
 add_custom_command(
   OUTPUT ${DFA_LOCATION} ${TOKEN_KIND_LOCATION}
-  COMMAND dfa ${DFA_LOCATION} ${TOKEN_KIND_LOCATION}
-  DEPENDS dfa
+  COMMAND lex_meta ${DFA_LOCATION} ${TOKEN_KIND_LOCATION}
+  DEPENDS lex_meta
   COMMENT "Generating dfa."
   VERBATIM
 )
@@ -30,4 +30,4 @@ file(GLOB_RECURSE CRINGE_SOURCES "cringe/*.c" "cringe/*.h")
 add_executable(cringe ${CRINGE_SOURCES} ${DFA_LOCATION} ${TOKEN_KIND_LOCATION})
 
 target_include_directories(cringe PRIVATE "cringe" "generated")
-target_include_directories(dfa PRIVATE "cringe")
+target_include_directories(lex_meta PRIVATE "cringe")
