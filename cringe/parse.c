@@ -147,6 +147,12 @@ static state_t state_while_body(token_t while_tok, token_t lparen) {
   };
 }
 
+static state_t state_local_decl() {
+  return (state_t) {
+    .kind = STATE_LOCAL_DECL
+  };
+}
+
 static void push(parser_t* p, state_t state) {
   vec_put(p->stack, state);
 }
@@ -213,6 +219,11 @@ static bool handle_PRIMARY(parser_t* p, state_t state) {
       node(p, PARSE_NODE_INTEGER, lex(p), 0);
       return true;
     }
+
+    case TOKEN_IDENTIFIER: {
+      node(p, PARSE_NODE_IDENTIFIER, lex(p), 0);
+      return true;
+    }
   }
 }
 
@@ -222,7 +233,10 @@ static bool handle_BINARY(parser_t* p, state_t state) {
   return true;
 }
 
-static int bin_prec_map(token_t op) {
+static int bin_prec_map(token_t op, bool calling) {
+  /*
+    calling: whether the result will be used as a minimum for recurring based on precedence - used to allow right recursion
+  */
   switch (op.kind) {
     case '*':
     case '/':
@@ -230,6 +244,8 @@ static int bin_prec_map(token_t op) {
     case '+':
     case '-':
       return 10;
+    case '=':
+      return 5 - calling;
     default:
       return 0;
   }
@@ -245,6 +261,8 @@ static parse_node_kind_t bin_op_map(token_t op) {
       return PARSE_NODE_ADD;
     case '-':
       return PARSE_NODE_SUB;
+    case '=':
+      return PARSE_NODE_ASSIGN;
     default:
       assert(false);
       return PARSE_NODE_UNINITIALIZED;
@@ -252,13 +270,13 @@ static parse_node_kind_t bin_op_map(token_t op) {
 }
 
 static bool handle_BINARY_INFIX(parser_t* p, state_t state) {
-  if (bin_prec_map(peek(p)) > state.as.binary.prec) {
+  if (bin_prec_map(peek(p), false) > state.as.binary.prec) {
     token_t op = lex(p);
     parse_node_kind_t kind = bin_op_map(op);
 
     push(p, state_binary_infix(state.as.binary.prec));
     push(p, state_complete(kind, op, 2));
-    push(p, state_binary(bin_prec_map(op)));
+    push(p, state_binary(bin_prec_map(op, true)));
   }
 
   return true;
@@ -325,6 +343,11 @@ static bool handle_STMT(parser_t* p, state_t state) {
 
     case TOKEN_KEYWORD_WHILE: {
       push(p, state_while());
+    } break;
+
+    case TOKEN_KEYWORD_INT: {
+      push(p, state_semi());
+      push(p, state_local_decl());
     } break;
   }
 
@@ -426,6 +449,34 @@ static bool handle_WHILE_BODY(parser_t* p, state_t state) {
 
   push(p, state_complete(PARSE_NODE_WHILE, state.as.while_body.while_tok, 2));
   push(p, state_stmt());
+
+  return true;
+}
+
+static bool handle_LOCAL_DECL(parser_t* p, state_t state) {
+  (void)state;
+
+  switch (peek(p).kind) {
+    default:
+      error(p, peek(p), "expected a typename for a local declaration");
+      return false;
+
+    case TOKEN_KEYWORD_INT:
+      break;
+  }
+
+  token_t ty = lex(p);
+
+
+  if (peek(p).kind != TOKEN_IDENTIFIER) {
+    error(p, ty, "a local declaration requires that a name to follow this type");
+    return false;
+  }
+
+  token_t name_tok = lex(p);
+
+  node(p, PARSE_NODE_IDENTIFIER, name_tok, 0);
+  node(p, PARSE_NODE_LOCAL_DECL, ty, 1);
 
   return true;
 }
