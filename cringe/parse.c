@@ -14,6 +14,7 @@ typedef struct {
     struct { token_t lbrace; int count; } block_stmt;
     struct { token_t if_tok; token_t lparen; } if_body;
     struct { token_t if_tok; } _else;
+    struct { token_t while_tok; token_t lparen; } while_body;
   } as;
 } state_t;
 
@@ -129,6 +130,20 @@ static state_t state_else(token_t if_tok) {
   return (state_t) {
     .kind = STATE_ELSE,
     .as._else.if_tok = if_tok,
+  };
+}
+
+static state_t state_while() {
+  return (state_t) {
+    .kind = STATE_WHILE
+  };
+}
+
+static state_t state_while_body(token_t while_tok, token_t lparen) {
+  return (state_t) {
+    .kind = STATE_WHILE_BODY,
+    .as.while_body.while_tok = while_tok,
+    .as.while_body.lparen = lparen
   };
 }
 
@@ -307,6 +322,10 @@ static bool handle_STMT(parser_t* p, state_t state) {
     case TOKEN_KEYWORD_IF: {
       push(p, state_if());
     } break;
+
+    case TOKEN_KEYWORD_WHILE: {
+      push(p, state_while());
+    } break;
   }
 
   return true;
@@ -378,6 +397,35 @@ static bool handle_ELSE(parser_t* p, state_t state) {
   else {
     node(p, PARSE_NODE_IF, state.as._else.if_tok, 2);
   }
+
+  return true;
+}
+
+static bool handle_WHILE(parser_t* p, state_t state) {
+  (void)state;
+
+  token_t while_tok = peek(p);
+  REQUIRE(p, TOKEN_KEYWORD_WHILE, "expected a 'while' loop");
+
+  token_t lparen = peek(p);
+  REQUIRE(p, '(', "while loop needs an expression: 'while (expr)'");
+
+  push(p, state_while_body(while_tok, lparen));
+  push(p, state_expr());
+
+  return true;
+}
+
+static bool handle_WHILE_BODY(parser_t* p, state_t state) {
+  if (peek(p).kind != ')') {
+    error(p, state.as.while_body.lparen, "no closing ')'");
+    return false;
+  }
+
+  lex(p);
+
+  push(p, state_complete(PARSE_NODE_WHILE, state.as.while_body.while_tok, 2));
+  push(p, state_stmt());
 
   return true;
 }

@@ -12,3 +12,5 @@ X(BLOCK_CLOSE, "block_close")
 X(RETURN, "return")
 X(IF, "if")
 X(ELSE, "else")
+
+X(WHILE, "while")
