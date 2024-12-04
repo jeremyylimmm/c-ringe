@@ -68,14 +68,14 @@ static void make_inst_in_block(checker_t* c, sem_block_t* block, sem_inst_kind_t
     .num_ins = num_ins
   };
 
+  for (int i = num_ins-1; i >= 0; --i) {
+    inst.ins[i] = vec_pop(c->value_stack);
+  }
+
   if (has_out) {
     sem_value_t value = c->cur_func->next_value++;
     push_value(c, value);
     inst.out = value;
-  }
-
-  for (int i = num_ins-1; i >= 0; --i) {
-    inst.ins[i] = vec_pop(c->value_stack);
   }
 
   vec_put(block->code, inst);
