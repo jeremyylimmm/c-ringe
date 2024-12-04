@@ -10,7 +10,7 @@
 #define ARRAY_LENGTH(arr) ( sizeof(arr) / sizeof((arr)[0]) )
 #define foreach_list(ty, it, head) for (ty* it = head; it; it = it->next)
 
-typedef struct arena_t arena_t;
+typedef struct cringe_arena_t arena_t;
 
 typedef uint8_t byte_t;
 
@@ -85,6 +85,10 @@ inline void bitset_set(uint64_t* bs, size_t index) {
 
 inline void bitset_unset(uint64_t* bs, size_t index) {
   bs[index/64] &= ~(((uint64_t)1) << (index % 64));
+}
+
+inline uint64_t* bitset_alloc(arena_t* arena, size_t bit_count) {
+  return arena_array(arena, uint64_t, bitset_u64_count(bit_count));
 }
 
 typedef struct {

@@ -1,0 +1,19 @@
+X(START, "start")
+X(START_MEM, "mem")
+X(START_CTRL, "ctrl")
+
+X(END, "end")
+
+X(REGION, "region")
+X(PHI, "phi")
+
+X(BRANCH, "branch")
+X(BRANCH_TRUE, "true")
+X(BRANCH_FALSE, "false")
+
+X(CONSTANT, "constant") 
+
+X(ADD, "add")
+X(SUB, "sub")
+X(MUL, "mul")
+X(SDIV, "sdiv")

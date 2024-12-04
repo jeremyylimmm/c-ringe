@@ -2,6 +2,7 @@
 
 #include "base.h"
 #include "front/front.h"
+#include "back/cb.h"
 
 int main() {
   init_globals();
@@ -38,6 +39,19 @@ int main() {
   }
 
   sem_dump_unit(stdout, sem_unit);
+
+  {
+    cb_func_t* func = cb_new_func(arena);
+    
+    cb_node_start_result_t start = cb_node_start(func);
+    cb_node_t* value = cb_node_constant(func, 69);
+
+    cb_node_end(func, start.start_ctrl, start.start_mem, value);
+
+    cb_finalize_func(func);
+
+    cb_graphviz_func(stdout, func);
+  }
 
   return 0;
 }

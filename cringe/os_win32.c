@@ -6,7 +6,7 @@
 
 #define ARENA_CAPACITY ((size_t)5 * 1024 * 1024 * 1024) // May need to increase this?
 
-struct arena_t {
+struct cringe_arena_t {
   void* base;
 
   size_t page_size;

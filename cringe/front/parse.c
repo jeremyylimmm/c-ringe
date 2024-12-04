@@ -620,7 +620,7 @@ void dump_parse_tree(FILE* stream, parse_tree_t* tree) {
 
       DumpInfo child_info = {
         .depth = depth,
-        .first_child = arena_array(scratch.arena, uint64_t, bitset_u64_count(depth))
+        .first_child = bitset_alloc(scratch.arena, depth)
       };
 
       memcpy(child_info.first_child, info.first_child, bitset_u64_count(info.depth) * sizeof(uint64_t));
