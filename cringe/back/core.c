@@ -119,6 +119,23 @@ cb_node_t* cb_node_constant(cb_func_t* func, uint64_t value) {
   return node;
 }
 
+cb_node_t* cb_node_load(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address) {
+  cb_node_t* node = new_node(func, CB_NODE_LOAD, NUM_LOAD_INS, 0, CB_NODE_FLAG_NONE);
+  set_input(func, node, ctrl, LOAD_CTRL);
+  set_input(func, node, mem, LOAD_MEM);
+  set_input(func, node, address, LOAD_ADDR);
+  return node;
+}
+
+cb_node_t* cb_node_store(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address, cb_node_t* value) {
+  cb_node_t* node = new_node(func, CB_NODE_STORE, NUM_STORE_INS, 0, CB_NODE_FLAG_NONE);
+  set_input(func, node, ctrl, STORE_CTRL);
+  set_input(func, node, mem, STORE_MEM);
+  set_input(func, node, address, STORE_ADDR);
+  set_input(func, node, value, STORE_VALUE);
+  return node;
+}
+
 static cb_node_t* new_binary(cb_func_t* func, cb_node_kind_t kind, cb_node_t* lhs, cb_node_t* rhs) {
   cb_node_t* node = new_node(func, kind, NUM_BINARY_INS, 0, CB_NODE_FLAG_NONE);
   set_input(func, node, lhs, BINARY_LHS);

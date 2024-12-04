@@ -13,6 +13,9 @@ X(BRANCH_FALSE, "false")
 
 X(CONSTANT, "constant") 
 
+X(LOAD, "load")
+X(STORE, "store")
+
 X(ADD, "add")
 X(SUB, "sub")
 X(MUL, "mul")

@@ -22,6 +22,21 @@ enum {
   NUM_BRANCH_INS
 };
 
+enum {
+  LOAD_CTRL,
+  LOAD_MEM,
+  LOAD_ADDR,
+  NUM_LOAD_INS
+};
+
+enum {
+  STORE_CTRL,
+  STORE_MEM,
+  STORE_ADDR,
+  STORE_VALUE,
+  NUM_STORE_INS
+};
+
 #define DATA(node, ty) ((ty*)(node + 1))
 
 typedef struct {
