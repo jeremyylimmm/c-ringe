@@ -134,6 +134,10 @@ static void push_value(checker_t* c, sem_value_t value) {
   vec_put(c->value_stack, value);
 }
 
+static sem_value_t pop_value(checker_t* c) {
+  return vec_pop(c->value_stack);
+}
+
 static void error(checker_t* c, token_t token, char* message, ...) {
   va_list ap;
   va_start(ap, message);
@@ -236,11 +240,11 @@ static bool fn_check_IDENTIFIER(checker_t* c, parse_node_t* node) {
 
   token_t name_tok = get_token(c, node);
   string_view_t name = token_to_string_view(name_tok);
-
   sem_value_t address = scope_find(c, name, false);
 
   if (!address) {
     error(c, name_tok, "symbol does not exist");
+    make_inst(c, SEM_INST_POISON, true, 0, NULL);
     return false;
   }
 
@@ -287,11 +291,15 @@ static bool fn_check_ASSIGN(checker_t* c, parse_node_t* node) {
   sem_value_t* p_left = peek_value(c, 1);
 
   definer_t definer = c->definers[*p_left];
-
   sem_inst_t* inst = &definer.block->code[definer.inst];
 
   if (inst->kind != SEM_INST_LOAD) {
     error(c, get_token(c, node), "left-hand side is not an lvalue, so it cannot be assigned");
+
+    pop_value(c);
+    pop_value(c);
+    push_value(c, right); // Leave in state expected by other nodes
+
     return false;
   }
 
@@ -299,7 +307,6 @@ static bool fn_check_ASSIGN(checker_t* c, parse_node_t* node) {
   inst->flags |= SEM_INST_FLAG_HIDE_FROM_DUMP; // load isn't used - delete for clarity?
 
   make_inst(c, SEM_INST_STORE, false, 2, NULL);
-
   push_value(c, right);
 
   return true;
@@ -327,7 +334,7 @@ static bool fn_check_RETURN(checker_t* c, parse_node_t* node) {
   switch (node->children_count) {
     default:
       error(c, get_token(c, node), "compiler bug: unexpected parse node child count");
-      return false;
+      exit(1);
 
     case 0:
     case 1:

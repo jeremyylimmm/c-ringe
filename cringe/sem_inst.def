@@ -1,4 +1,5 @@
 X(INT_CONST, "int_const")
+X(POISON, "poison")
 
 X(ADD, "add")
 X(SUB, "sub")
