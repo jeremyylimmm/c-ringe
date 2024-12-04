@@ -79,8 +79,14 @@ static char* sem_inst_kind_label[] = {
 
 typedef uint32_t sem_value_t;
 
+typedef enum {
+  SEM_INST_FLAG_NONE = 0,
+  SEM_INST_FLAG_HIDE_FROM_DUMP = BIT(0),
+} sem_inst_flags_t;
+
 typedef struct {
   sem_inst_kind_t kind;
+  sem_inst_flags_t flags;
 
   int num_ins;
   sem_value_t ins[SEM_MAX_INS];

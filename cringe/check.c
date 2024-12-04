@@ -2,6 +2,25 @@
 
 #include "front.h"
 
+#define SCOPE_MAX_LOAD_FACTOR (0.5f)
+
+typedef struct {
+  sem_block_t* block;
+  int inst;
+} definer_t;
+
+typedef struct {
+  string_view_t name;
+  sem_value_t value;
+} scope_entry_t;
+
+typedef struct scope_t scope_t;
+struct scope_t {
+  scope_entry_t* table;
+  size_t count;
+  size_t capacity;
+};
+
 typedef struct {
   arena_t* arena;
   parse_tree_t* tree;
@@ -18,7 +37,87 @@ typedef struct {
   int i;
   
   vec_t(sem_block_t*) block_stack;
+  vec_t(definer_t) definers;
+
+  vec_t(scope_t) scope_stack;
 } checker_t;
+
+static scope_entry_t* _scope_find(size_t cap, scope_entry_t* table, string_view_t name) {
+  size_t i = fnv1a(name.str, name.len * sizeof(char)) % cap;
+
+  for (size_t j = 0; j < cap; ++j) {
+    scope_entry_t* entry = table + i;
+
+    if (!entry->name.str) {
+      return entry;
+    }
+
+    if (string_view_cmp(entry->name, name)) {
+      return entry;
+    }
+
+    i = (i + 1) % cap;
+  }
+
+  assert(false && "scope table did not resize appropriately");
+  exit(1);
+}
+
+static void scope_insert(checker_t* c, string_view_t name, sem_value_t value) {
+  scope_t* s = &vec_back(c->scope_stack);
+
+  if (s->capacity == 0 || (float)s->count > (float)(s->capacity) * SCOPE_MAX_LOAD_FACTOR) {
+    size_t new_cap = s->capacity ? s->capacity * 2 : 8;
+    scope_entry_t* new_table = calloc(new_cap, sizeof(scope_entry_t));
+
+    for (size_t i = 0; i < s->capacity; ++i) {
+      if (!s->table[i].name.str) {
+        continue;
+      }
+
+      scope_entry_t* e = _scope_find(new_cap, new_table, s->table[i].name);
+      e->name = s->table[i].name;
+      e->value = s->table[i].value;
+    }
+
+    free(s->table);
+
+    s->capacity = new_cap;
+    s->table = new_table;
+  }
+
+  scope_entry_t* e = _scope_find(s->capacity, s->table, name);
+  assert(!e->name.str);
+
+  e->name = name;
+  e->value = value;
+
+  s->count++;
+}
+
+static sem_value_t scope_find(checker_t* c, string_view_t name, bool limit_to_current_scope) {
+  int64_t i = vec_len(c->scope_stack)-1;
+
+  while (i >= 0) {
+    scope_t* s = &c->scope_stack[i];
+
+    if (s->count) {
+      scope_entry_t* e = _scope_find(s->capacity, s->table, name);
+
+      if (e->name.str) {
+        return e->value;
+      }
+    }
+
+    if (limit_to_current_scope) {
+      return 0;
+    }
+
+    --i;
+  }
+
+  return 0;
+}
 
 static token_t get_token(checker_t* c, parse_node_t* node) {
   return c->tree->tokens[node-c->tree->nodes];
@@ -29,11 +128,6 @@ static char* token_to_string(checker_t* c, token_t token) {
   memcpy(buf, token.start, token.length * sizeof(char));
   buf[token.length] = '\0';
   return buf;
-}
-
-static sem_value_t peek_value(checker_t* c) {
-  assert(vec_len(c->value_stack));
-  return c->value_stack[vec_len(c->value_stack)-1];
 }
 
 static void push_value(checker_t* c, sem_value_t value) {
@@ -59,6 +153,19 @@ static sem_block_t* new_block(checker_t* c) {
   return c->cur_block = b;
 }
 
+static sem_value_t new_value(checker_t* c, sem_block_t* block, int inst) {
+  assert(vec_len(c->definers) == c->cur_func->next_value);
+
+  definer_t definer = {
+    .block = block,
+    .inst = inst
+  };
+
+  vec_put(c->definers, definer);
+
+  return c->cur_func->next_value++;
+}
+
 static void make_inst_in_block(checker_t* c, sem_block_t* block, sem_inst_kind_t kind, bool has_out, int num_ins, void* data) {
   assert(num_ins <= SEM_MAX_INS);
 
@@ -73,7 +180,7 @@ static void make_inst_in_block(checker_t* c, sem_block_t* block, sem_inst_kind_t
   }
 
   if (has_out) {
-    sem_value_t value = c->cur_func->next_value++;
+    sem_value_t value = new_value(c, block, (int)vec_len(block->code));
     push_value(c, value);
     inst.out = value;
   }
@@ -93,6 +200,23 @@ static sem_block_t* pop_block(checker_t* c) {
   return vec_pop(c->block_stack);
 }
 
+static void push_scope(checker_t* c) {
+  scope_t scope = {0};
+  vec_put(c->scope_stack, scope);
+}
+
+static void pop_scope(checker_t* c) {
+  scope_t scope = vec_pop(c->scope_stack);
+  free(scope.table);
+}
+
+static string_view_t token_to_string_view(token_t token) {
+  return (string_view_t) {
+    .len = token.length,
+    .str = token.start
+  };
+}
+
 static bool fn_check_INTEGER(checker_t* c, parse_node_t* node) {
   token_t token = get_token(c, node);
   uint64_t value = 0;
@@ -109,7 +233,20 @@ static bool fn_check_INTEGER(checker_t* c, parse_node_t* node) {
 
 static bool fn_check_IDENTIFIER(checker_t* c, parse_node_t* node) {
   (void)node;
-  make_inst(c, SEM_INST_BULLSHIT, true, 0, NULL);
+
+  token_t name_tok = get_token(c, node);
+  string_view_t name = token_to_string_view(name_tok);
+
+  sem_value_t address = scope_find(c, name, false);
+
+  if (!address) {
+    error(c, name_tok, "symbol does not exist");
+    return false;
+  }
+
+  push_value(c, address);
+  make_inst(c, SEM_INST_LOAD, true, 1, NULL);
+
   return true;
 }
 
@@ -138,23 +275,51 @@ static bool fn_check_DIV(checker_t* c, parse_node_t* node) {
   return gen_binary(c, SEM_INST_DIV);
 }
 
+static sem_value_t* peek_value(checker_t* c, int offset) {
+  assert(vec_len(c->value_stack) > offset);
+  return &c->value_stack[vec_len(c->value_stack) - offset - 1];
+}
+
 static bool fn_check_ASSIGN(checker_t* c, parse_node_t* node) {
   (void)node;
-  sem_value_t value = peek_value(c);
+
+  sem_value_t right = *peek_value(c, 0);
+  sem_value_t* p_left = peek_value(c, 1);
+
+  definer_t definer = c->definers[*p_left];
+
+  sem_inst_t* inst = &definer.block->code[definer.inst];
+
+  if (inst->kind != SEM_INST_LOAD) {
+    error(c, get_token(c, node), "left-hand side is not an lvalue, so it cannot be assigned");
+    return false;
+  }
+
+  *p_left = inst->ins[0]; // replace with load address - should be safe to do because no common subexpressions - shit is a tree
+  inst->flags |= SEM_INST_FLAG_HIDE_FROM_DUMP; // load isn't used - delete for clarity?
+
   make_inst(c, SEM_INST_STORE, false, 2, NULL);
-  push_value(c, value);
+
+  push_value(c, right);
+
   return true;
+}
+
+static void open_block(checker_t* c) {
+  c->brace_depth++;
+  push_scope(c);
 }
 
 static bool fn_check_BLOCK_OPEN(checker_t* c, parse_node_t* node) {
   (void)node;
-  c->brace_depth++;
+  open_block(c);
   return true;
 }
 
 static bool fn_check_BLOCK(checker_t* c, parse_node_t* node) {
   (void)node;
   c->brace_depth--;
+  pop_scope(c);
   return true;
 }
 
@@ -174,8 +339,21 @@ static bool fn_check_RETURN(checker_t* c, parse_node_t* node) {
 
 static bool fn_check_LOCAL_DECL(checker_t* c, parse_node_t* node) {
   (void)node;
+
   make_inst(c, SEM_INST_ALLOCA, true, 0, NULL);
-  c->i++; // name
+  sem_value_t value = *peek_value(c, 0);
+
+  parse_node_t* name_node = &c->tree->nodes[c->i++];
+  token_t name_token = get_token(c, name_node);
+  string_view_t name = token_to_string_view(name_token);
+
+  if (scope_find(c, name, true)) {
+    error(c, name_token, "this name clashes with another symbol in the current scope");
+    return false; 
+  }
+
+  scope_insert(c, name, value);
+
   return true;
 }
 
@@ -295,17 +473,27 @@ static bool check_function(checker_t* c) {
 
   bool success = true;
 
+  // Reset the checker
+
   c->cur_func = c->cur_func->next = arena_type(c->arena, sem_func_t);
   c->cur_func->next_value = 1;
 
-  // Reset the checker
-  c->cur_block = NULL;
+  assert(vec_len(c->scope_stack) == 0);
+  assert(c->brace_depth == 0);
+
+  definer_t null_definer = {0};
+  vec_clear(c->definers);
+  vec_put(c->definers, null_definer);
+
   vec_clear(c->value_stack);
 
+  c->cur_block = NULL;
   c->cur_func->cfg = new_block(c);
 
+  // Start checking
+
   c->i++; // lbrace
-  c->brace_depth = 1;
+  open_block(c);
 
   while (c->brace_depth > 0) {
     parse_node_t* node = &c->tree->nodes[c->i++];
@@ -373,6 +561,8 @@ sem_unit_t* check_unit(arena_t* arena, char* path, char* source, parse_tree_t* t
 
   vec_free(c.value_stack);
   vec_free(c.block_stack);
+  vec_free(c.definers);
+  vec_free(c.scope_stack);
 
   if (!success) {
     return NULL;
@@ -387,6 +577,10 @@ sem_unit_t* check_unit(arena_t* arena, char* path, char* source, parse_tree_t* t
 static void dump_block(FILE* stream, sem_block_t* b) {
   for (int i = 0; i < vec_len(b->code); ++i) {
     sem_inst_t* inst = b->code + i;
+
+    if (inst->flags & SEM_INST_FLAG_HIDE_FROM_DUMP) {
+      continue;
+    }
 
     fprintf(stream, "  ");
 

@@ -5,6 +5,8 @@
 #include <assert.h>
 #include <stdbool.h>
 
+#define BIT(x) (1 << (x))
+
 #define ARRAY_LENGTH(arr) ( sizeof(arr) / sizeof((arr)[0]) )
 #define foreach_list(ty, it, head) for (ty* it = head; it; it = it->next)
 
@@ -83,4 +85,13 @@ inline void bitset_set(uint64_t* bs, size_t index) {
 
 inline void bitset_unset(uint64_t* bs, size_t index) {
   bs[index/64] &= ~(((uint64_t)1) << (index % 64));
+}
+
+typedef struct {
+  size_t len;
+  char* str;
+} string_view_t;
+
+inline bool string_view_cmp(string_view_t a, string_view_t b) {
+  return a.len == b.len && memcmp(a.str, b.str, a.len * sizeof(char)) == 0;
 }
