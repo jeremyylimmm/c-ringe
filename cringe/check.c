@@ -85,10 +85,6 @@ static void make_inst(checker_t* c, sem_inst_kind_t kind, bool has_out, int num_
   make_inst_in_block(c, c->cur_block, kind, has_out, num_ins, data);
 }
 
-static void push_cur_block(checker_t* c) {
-  vec_put(c->block_stack, c->cur_block);
-}
-
 static void push_block(checker_t* c, sem_block_t* block) {
   vec_put(c->block_stack, block);
 }
@@ -183,17 +179,23 @@ static bool fn_check_LOCAL_DECL(checker_t* c, parse_node_t* node) {
   return true;
 }
 
+static sem_block_t** make_branch(checker_t* c, sem_block_t* from) {
+  sem_block_t** locs = arena_array(c->arena, sem_block_t*, 2);
+  make_inst_in_block(c, from, SEM_INST_BRANCH, false, 1, locs);
+  return locs;
+}
+
+static void generate_branch_and_body(checker_t* c) {
+  sem_block_t* head_tail = c->cur_block;
+  sem_block_t** locs = make_branch(c, head_tail);
+
+  push_block(c, head_tail); // needed to be able to patch branch
+  locs[0] = new_block(c);
+}
+
 static bool fn_check_IF_INTRO(checker_t* c, parse_node_t* node) {
   (void)node;
-
-  sem_block_t** locs = arena_array(c->arena, sem_block_t*, 2);
-  make_inst(c, SEM_INST_BRANCH, false, 1, locs);
-
-  // Push head-tail so branch can be filled with targets
-  push_cur_block(c);
-
-  locs[0] = new_block(c);
-
+  generate_branch_and_body(c);
   return true;
 }
 
@@ -234,13 +236,45 @@ static bool fn_check_ELSE(checker_t* c, parse_node_t* node) {
 static bool fn_check_IF_ELSE(checker_t* c, parse_node_t* node) {
   (void)node;
 
-  sem_block_t* body_tail = pop_block(c);
   sem_block_t* else_tail = c->cur_block;
+  sem_block_t* body_tail = pop_block(c);
 
   sem_block_t* end_head = new_block(c);
 
   make_goto(c, body_tail, end_head);
   make_goto(c, else_tail, end_head);
+
+  return true;
+}
+
+static bool fn_check_WHILE_INTRO(checker_t* c, parse_node_t* node) {
+  (void)node;
+
+  sem_block_t* entry = c->cur_block;
+  sem_block_t* head_head = new_block(c);
+
+  make_goto(c, entry, head_head);
+  push_block(c, head_head); // needed to be able to jump back to head-head
+
+  return true;
+}
+
+static bool fn_check_WHILE_COND(checker_t* c, parse_node_t* node) {
+  (void)node;
+  generate_branch_and_body(c);
+  return true;
+}
+
+static bool fn_check_WHILE(checker_t* c, parse_node_t* node) {
+  (void)node;
+
+  sem_block_t* body_tail = c->cur_block;
+
+  sem_block_t* end_head = new_block(c);
+  pop_and_patch_branch_else(c, end_head);
+
+  sem_block_t* head_head = pop_block(c);
+  make_goto(c, body_tail, head_head);
 
   return true;
 }
@@ -253,7 +287,6 @@ static bool fn_check_IF_ELSE(checker_t* c, parse_node_t* node) {
 
 FN_UNHANDLED(FUNCTION);
 FN_UNHANDLED(FUNCTION_INTRO);
-FN_UNHANDLED(WHILE);
 FN_UNHANDLED(UNIT);
 FN_UNHANDLED(LOCAL_NAME);
 

@@ -14,7 +14,7 @@ typedef struct {
     struct { token_t lbrace; int count; } block_stmt;
     struct { token_t lparen; } if_body;
     struct { token_t lparen; } _else;
-    struct { token_t while_tok; token_t lparen; } while_body;
+    struct { token_t lparen; } while_body;
     struct { int count; } top_level;
   } as;
 } state_t;
@@ -139,10 +139,9 @@ static state_t state_while() {
   };
 }
 
-static state_t state_while_body(token_t while_tok, token_t lparen) {
+static state_t state_while_body(token_t lparen) {
   return (state_t) {
     .kind = STATE_WHILE_BODY,
-    .as.while_body.while_tok = while_tok,
     .as.while_body.lparen = lparen
   };
 }
@@ -447,7 +446,9 @@ static bool handle_WHILE(parser_t* p, state_t state) {
   token_t lparen = peek(p);
   REQUIRE(p, '(', "while loop needs an expression: 'while (expr)'");
 
-  push(p, state_while_body(while_tok, lparen));
+  node(p, PARSE_NODE_WHILE_INTRO, while_tok, 0);
+  push(p, state_while_body(lparen));
+  push(p, state_complete(PARSE_NODE_WHILE_COND, lparen, 1));
   push(p, state_expr());
 
   return true;
@@ -461,7 +462,7 @@ static bool handle_WHILE_BODY(parser_t* p, state_t state) {
 
   lex(p);
 
-  push(p, state_complete(PARSE_NODE_WHILE, state.as.while_body.while_tok, 2));
+  push(p, state_complete(PARSE_NODE_WHILE, state.as.while_body.lparen, 3));
   push(p, state_stmt());
 
   return true;

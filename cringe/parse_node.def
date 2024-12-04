@@ -20,6 +20,8 @@ X(IF_ELSE, "if_else")
 
 X(ELSE, "else")
 
+X(WHILE_INTRO, "while_intro")
+X(WHILE_COND, "while_cond")
 X(WHILE, "while")
 
 X(LOCAL_NAME, "local_name")
