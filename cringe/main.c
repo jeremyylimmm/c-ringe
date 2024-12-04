@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 #include "base.h"
-#include "front.h"
+#include "front/front.h"
 
 int main() {
   init_globals();
