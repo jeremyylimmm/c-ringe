@@ -16,6 +16,8 @@ typedef struct {
 
   int brace_depth;
   int i;
+  
+  vec_t(sem_block_t*) block_stack;
 } checker_t;
 
 static token_t get_token(checker_t* c, parse_node_t* node) {
@@ -47,17 +49,17 @@ static void error(checker_t* c, token_t token, char* message, ...) {
   va_end(ap);
 }
 
-static void new_block(checker_t* c) {
+static sem_block_t* new_block(checker_t* c) {
   sem_block_t* b = arena_type(c->arena, sem_block_t);
 
   if (c->cur_block) {
     c->cur_block->next = b;
   }
 
-  c->cur_block = b;
+  return c->cur_block = b;
 }
 
-static void inst(checker_t* c, sem_inst_kind_t kind, bool has_out, int num_ins, void* data) {
+static void make_inst_in_block(checker_t* c, sem_block_t* block, sem_inst_kind_t kind, bool has_out, int num_ins, void* data) {
   assert(num_ins <= SEM_MAX_INS);
 
   sem_inst_t inst = {
@@ -76,7 +78,23 @@ static void inst(checker_t* c, sem_inst_kind_t kind, bool has_out, int num_ins, 
     inst.ins[i] = vec_pop(c->value_stack);
   }
 
-  vec_put(c->cur_block->code, inst);
+  vec_put(block->code, inst);
+}
+
+static void make_inst(checker_t* c, sem_inst_kind_t kind, bool has_out, int num_ins, void* data) {
+  make_inst_in_block(c, c->cur_block, kind, has_out, num_ins, data);
+}
+
+static void push_cur_block(checker_t* c) {
+  vec_put(c->block_stack, c->cur_block);
+}
+
+static void push_block(checker_t* c, sem_block_t* block) {
+  vec_put(c->block_stack, block);
+}
+
+static sem_block_t* pop_block(checker_t* c) {
+  return vec_pop(c->block_stack);
 }
 
 static bool fn_check_INTEGER(checker_t* c, parse_node_t* node) {
@@ -88,19 +106,19 @@ static bool fn_check_INTEGER(checker_t* c, parse_node_t* node) {
     value += token.start[i] - '0';
   }
 
-  inst(c, SEM_INST_INT_CONST, true, 0, (void*)value);
+  make_inst(c, SEM_INST_INT_CONST, true, 0, (void*)value);
 
   return true;
 }
 
 static bool fn_check_IDENTIFIER(checker_t* c, parse_node_t* node) {
   (void)node;
-  inst(c, SEM_INST_BULLSHIT, true, 0, NULL);
+  make_inst(c, SEM_INST_BULLSHIT, true, 0, NULL);
   return true;
 }
 
 static bool gen_binary(checker_t* c, sem_inst_kind_t kind) {
-  inst(c, kind, true, 2, NULL);
+  make_inst(c, kind, true, 2, NULL);
   return true;
 }
 
@@ -127,7 +145,7 @@ static bool fn_check_DIV(checker_t* c, parse_node_t* node) {
 static bool fn_check_ASSIGN(checker_t* c, parse_node_t* node) {
   (void)node;
   sem_value_t value = peek_value(c);
-  inst(c, SEM_INST_STORE, false, 2, NULL);
+  make_inst(c, SEM_INST_STORE, false, 2, NULL);
   push_value(c, value);
   return true;
 }
@@ -152,7 +170,7 @@ static bool fn_check_RETURN(checker_t* c, parse_node_t* node) {
 
     case 0:
     case 1:
-      inst(c, SEM_INST_RETURN, false, node->children_count, NULL);
+      make_inst(c, SEM_INST_RETURN, false, node->children_count, NULL);
       new_block(c);
       return true;
   }
@@ -160,8 +178,70 @@ static bool fn_check_RETURN(checker_t* c, parse_node_t* node) {
 
 static bool fn_check_LOCAL_DECL(checker_t* c, parse_node_t* node) {
   (void)node;
-  inst(c, SEM_INST_ALLOCA, true, 0, NULL);
+  make_inst(c, SEM_INST_ALLOCA, true, 0, NULL);
   c->i++; // name
+  return true;
+}
+
+static bool fn_check_IF_INTRO(checker_t* c, parse_node_t* node) {
+  (void)node;
+
+  sem_block_t** locs = arena_array(c->arena, sem_block_t*, 2);
+  make_inst(c, SEM_INST_BRANCH, false, 1, locs);
+
+  // Push head-tail so branch can be filled with targets
+  push_cur_block(c);
+
+  locs[0] = new_block(c);
+
+  return true;
+}
+
+static void make_goto(checker_t* c, sem_block_t* from, sem_block_t* to) {
+  make_inst_in_block(c, from, SEM_INST_GOTO, false, 0, to);
+}
+
+static void pop_and_patch_branch_else(checker_t* c, sem_block_t* loc) {
+  sem_block_t* head_tail = pop_block(c);
+  sem_block_t** locs = vec_back(head_tail->code).data;
+  locs[1] = loc;
+}
+
+static bool fn_check_IF(checker_t* c, parse_node_t* node) {
+  (void)node;
+
+  sem_block_t* body_tail = c->cur_block;
+  sem_block_t* end_head = new_block(c);
+
+  pop_and_patch_branch_else(c, end_head);
+  make_goto(c, body_tail, end_head);
+
+  return true;
+}
+
+static bool fn_check_ELSE(checker_t* c, parse_node_t* node) {
+  (void)node;
+
+  sem_block_t* body_tail = c->cur_block;
+  sem_block_t* else_head = new_block(c);
+
+  pop_and_patch_branch_else(c, else_head);
+  push_block(c, body_tail); // need to add a goto to the end
+
+  return true;
+}
+
+static bool fn_check_IF_ELSE(checker_t* c, parse_node_t* node) {
+  (void)node;
+
+  sem_block_t* body_tail = pop_block(c);
+  sem_block_t* else_tail = c->cur_block;
+
+  sem_block_t* end_head = new_block(c);
+
+  make_goto(c, body_tail, end_head);
+  make_goto(c, else_tail, end_head);
+
   return true;
 }
 
@@ -173,9 +253,6 @@ static bool fn_check_LOCAL_DECL(checker_t* c, parse_node_t* node) {
 
 FN_UNHANDLED(FUNCTION);
 FN_UNHANDLED(FUNCTION_INTRO);
-FN_UNHANDLED(IF_INTRO);
-FN_UNHANDLED(IF);
-FN_UNHANDLED(ELSE);
 FN_UNHANDLED(WHILE);
 FN_UNHANDLED(UNIT);
 FN_UNHANDLED(LOCAL_NAME);
@@ -192,8 +269,7 @@ static bool check_function(checker_t* c) {
   c->cur_block = NULL;
   vec_clear(c->value_stack);
 
-  new_block(c);
-  c->cur_func->cfg = c->cur_block;
+  c->cur_func->cfg = new_block(c);
 
   c->i++; // lbrace
   c->brace_depth = 1;
@@ -263,6 +339,7 @@ sem_unit_t* check_unit(arena_t* arena, char* path, char* source, parse_tree_t* t
   }
 
   vec_free(c.value_stack);
+  vec_free(c.block_stack);
 
   if (!success) {
     return NULL;
@@ -292,6 +369,21 @@ static void dump_block(FILE* stream, sem_block_t* b) {
       }
 
       fprintf(stream, "_%u", inst->ins[j]);
+    }
+
+    switch (inst->kind) {
+      case SEM_INST_GOTO:
+        fprintf(stream, "bb_%d", ((sem_block_t*)inst->data)->temp_id);
+        break;
+
+      case SEM_INST_BRANCH: {
+        sem_block_t** locs = inst->data;
+        fprintf(stream, " [bb_%d : bb_%d]", locs[0]->temp_id, locs[1]->temp_id);
+      } break;
+
+      case SEM_INST_INT_CONST: {
+        fprintf(stream, "%llu", (uint64_t)inst->data);
+      } break;
     }
 
     fprintf(stream, "\n");

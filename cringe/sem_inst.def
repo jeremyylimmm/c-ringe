@@ -12,3 +12,6 @@ X(RETURN, "return")
 X(BULLSHIT, "bullshit")
 
 X(ALLOCA, "alloca")
+
+X(BRANCH, "branch")
+X(GOTO, "goto")

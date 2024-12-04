@@ -16,6 +16,7 @@ X(RETURN, "return")
 
 X(IF_INTRO, "if_intro")
 X(IF, "if")
+X(IF_ELSE, "if_else")
 
 X(ELSE, "else")
 

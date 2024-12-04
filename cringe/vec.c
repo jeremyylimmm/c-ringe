@@ -74,3 +74,8 @@ void vec_clear(void* v) {
     hdr(v)->length = 0;
   }
 }
+
+size_t _vec_back(void* v) {
+  assert(vec_len(v) > 0);
+  return hdr(v)->length - 1;
+}

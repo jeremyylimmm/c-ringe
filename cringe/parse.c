@@ -404,8 +404,8 @@ static bool handle_IF(parser_t* p, state_t state) {
   token_t lparen = peek(p);
   REQUIRE(p, '(', "if statement needs an expression: 'if (expr)'");
 
-  node(p, PARSE_NODE_IF_INTRO, if_tok, 0);
   push(p, state_if_body(lparen));
+  push(p, state_complete(PARSE_NODE_IF_INTRO, if_tok, 1));
   push(p, state_expr());
 
   return true;
@@ -428,11 +428,11 @@ static bool handle_IF_BODY(parser_t* p, state_t state) {
 static bool handle_ELSE(parser_t* p, state_t state) {
   if (peek(p).kind == TOKEN_KEYWORD_ELSE) {
     node(p, PARSE_NODE_ELSE, lex(p), 0);
-    push(p, state_complete(PARSE_NODE_IF, state.as._else.lparen, 5));
+    push(p, state_complete(PARSE_NODE_IF_ELSE, state.as._else.lparen, 4));
     push(p, state_stmt());
   }
   else {
-    node(p, PARSE_NODE_IF, state.as._else.lparen, 3);
+    node(p, PARSE_NODE_IF, state.as._else.lparen, 2);
   }
 
   return true;
