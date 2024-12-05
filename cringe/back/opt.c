@@ -248,6 +248,8 @@ static void remove_node(cb_opt_context_t* opt, cb_node_t* first) {
     cb_node_t* node = vec_pop(opt->stack).node;
     assert(node->uses == NULL);
 
+    worklist_remove(opt, node);
+
     for (int i = 0; i < node->num_ins; ++i) {
       if (!node->ins[i]) {
         continue;
@@ -259,6 +261,8 @@ static void remove_node(cb_opt_context_t* opt, cb_node_t* first) {
         vec_put(opt->stack, stack_item(false, node->ins[i]));
       }
     }
+
+    //memset(node, 0, sizeof(*node));
   }
 }
 
