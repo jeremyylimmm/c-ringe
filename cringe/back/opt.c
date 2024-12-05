@@ -7,10 +7,23 @@ typedef struct {
   vec_t(int) sparse;
 } worklist_t;
 
+typedef struct {
+  bool ins_processed;
+  cb_node_t* node;
+} stack_item_t;
+
 struct cb_opt_context_t {
+  cb_func_t* func;
   worklist_t worklist;
-  vec_t(cb_node_t*) stack; // reset locally and used for recursive stuff
+  vec_t(stack_item_t) stack; // reset locally and used for recursive stuff
 };
+
+static stack_item_t stack_item(bool ins_processed, cb_node_t* node) {
+  return (stack_item_t) {
+    .ins_processed = ins_processed,
+    .node = node
+  };
+}
 
 static void worklist_add(cb_opt_context_t* opt, cb_node_t* node) {
   worklist_t* w = &opt->worklist;
@@ -73,22 +86,47 @@ void cb_free_opt_context(cb_opt_context_t* opt) {
   free(opt);
 }
 
-static void reset_context(cb_opt_context_t* opt) {
+static void reset_context(cb_opt_context_t* opt, cb_func_t* func) {
   vec_clear(opt->worklist.packed);
   vec_clear(opt->worklist.sparse);
   vec_clear(opt->stack);
+  opt->func = func;
 }
 
 typedef cb_node_t*(*idealize_func_t)(cb_opt_context_t*, cb_node_t*);
 
-static cb_node_t* idealize_phi(cb_opt_context_t* opt, cb_node_t* node) {
-  if (node->num_ins == 2) {
-    worklist_add(opt, node->ins[0]); // region may be able to be collapsed
-    return node->ins[1];
+static cb_node_t* try_simple_phi_elim(cb_node_t* phi) {
+  cb_node_t* input = NULL;
+
+  for (int i = 1; i < phi->num_ins; ++i) {
+    if (phi->ins[i] == phi) {
+      continue;
+    }
+
+    if (!input) {
+      input = phi->ins[i];
+    }
+
+    if (input != phi->ins[i]) {
+      return NULL;
+    }
   }
-  else {
-    return node;
+
+  assert(input);
+  return input;
+}
+
+static cb_node_t* idealize_phi(cb_opt_context_t* opt, cb_node_t* phi) {
+  (void)opt;
+  // if it can be determined that a phi has a single input, we can just replace the phi with that input
+  cb_node_t* simple_result = try_simple_phi_elim(phi);
+
+  if (simple_result) {
+    worklist_add(opt, phi->ins[0]);
+    return simple_result;
   }
+
+  return phi;
 }
 
 static cb_node_t* idealize_region(cb_opt_context_t* opt, cb_node_t* node) {
@@ -107,9 +145,83 @@ static cb_node_t* idealize_region(cb_opt_context_t* opt, cb_node_t* node) {
   return node->ins[0];
 }
 
+static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
+  // look at the most recent memory effects this load depends on
+  // if they all happen to the same address, we can eliminate the node and use the values directly
+
+  scratch_t scratch = scratch_get(0, NULL);
+  cb_node_t* result = load;
+
+  cb_node_t* address = load->ins[LOAD_ADDR];
+
+  vec_clear(opt->stack);
+  cb_node_t* first = load->ins[LOAD_MEM];
+  vec_put(opt->stack, stack_item(false, first));
+
+  // store the value stored at each memory effect
+  cb_node_t** map = arena_array(scratch.arena, cb_node_t*, opt->func->next_id);
+
+  // used to fill info for phi filling
+  cb_node_t** temp = arena_array(scratch.arena, cb_node_t*, opt->func->next_id);
+
+  // recurse to discover all paths
+  while (vec_len(opt->stack)) {
+    stack_item_t item = vec_pop(opt->stack);
+    cb_node_t* node = item.node;
+
+    switch (node->kind) {
+      default:
+        goto end; // hit something we can't inspect the value of
+
+      case CB_NODE_PHI: {
+
+        if (!item.ins_processed) {
+          if (map[node->id]) {
+            continue;
+          }
+
+          map[node->id] = cb_node_phi(opt->func);
+
+          vec_put(opt->stack, stack_item(true, node));
+
+          for (int i = 1; i < node->num_ins; ++i) {
+            vec_put(opt->stack, stack_item(false, node->ins[i]));
+          }
+        }
+        else {
+          for (int i = 1; i < node->num_ins; ++i) {
+            cb_node_t* input = map[node->ins[i]->id];
+            assert(input);
+            temp[i-1] = input;
+          }
+
+          cb_set_phi_ins(opt->func, map[node->id], node->ins[0], node->num_ins-1, temp);
+        }
+
+      } break; 
+
+      case CB_NODE_STORE: {
+        if (node->ins[STORE_ADDR] != address) {
+          goto end;
+        }
+
+        map[node->id] = node->ins[STORE_VALUE];
+      } break;
+    }
+  }
+
+  result = map[first->id];
+  assert(result);
+
+  end:
+  scratch_release(&scratch);
+  return result;
+}
+
 static idealize_func_t idealize_table[NUM_CB_NODE_KINDS] = {
   [CB_NODE_PHI] = idealize_phi,
-  [CB_NODE_REGION] = idealize_region
+  [CB_NODE_REGION] = idealize_region,
+  [CB_NODE_LOAD] = idealize_load,
 };
 
 static void find_and_remove_use(cb_node_t* user, int index) {
@@ -130,10 +242,10 @@ static void find_and_remove_use(cb_node_t* user, int index) {
 
 static void remove_node(cb_opt_context_t* opt, cb_node_t* first) {
   vec_clear(opt->stack);
-  vec_put(opt->stack, first);
+  vec_put(opt->stack, stack_item(false, first));
 
   while (vec_len(opt->stack)) {
-    cb_node_t* node = vec_pop(opt->stack);
+    cb_node_t* node = vec_pop(opt->stack).node;
     assert(node->uses == NULL);
 
     for (int i = 0; i < node->num_ins; ++i) {
@@ -144,7 +256,7 @@ static void remove_node(cb_opt_context_t* opt, cb_node_t* first) {
       find_and_remove_use(node, i);
 
       if (node->ins[i]->uses == NULL) {
-        vec_put(opt->stack, node->ins[i]);
+        vec_put(opt->stack, stack_item(false, node->ins[i]));
       }
     }
   }
@@ -169,7 +281,7 @@ static void replace_node(cb_opt_context_t* opt, cb_node_t* target, cb_node_t* so
 
 void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func) {
   scratch_t scratch = scratch_get(0, NULL);
-  reset_context(opt);
+  reset_context(opt, func);
 
   func_walk_t walk = func_walk_unspecified_order(scratch.arena, func);
 
