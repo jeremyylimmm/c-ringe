@@ -102,6 +102,14 @@ cb_node_t* cb_node_phi(cb_func_t* func) {
   return new_node(func, CB_NODE_PHI, 0, 0, CB_NODE_FLAG_NONE);
 }
 
+cb_node_t* cb_node_null(cb_func_t* func) {
+  return new_leaf(func, CB_NODE_NULL, 0, CB_NODE_FLAG_NONE);
+}
+
+cb_node_t* cb_node_alloca(cb_func_t* func) {
+  return new_leaf(func, CB_NODE_ALLOCA, 0, CB_NODE_FLAG_NONE);
+}
+
 cb_node_branch_result_t cb_node_branch(cb_func_t* func, cb_node_t* ctrl, cb_node_t* predicate) {
   cb_node_t* branch = new_node(func, CB_NODE_BRANCH, NUM_BRANCH_INS, 0, CB_NODE_FLAG_IS_CFG);
   set_input(func, branch, ctrl, BRANCH_CTRL);
@@ -405,6 +413,7 @@ func_walk_t func_walk_unspecified_order(arena_t* arena, cb_func_t* func) {
   cb_node_t** stack = arena_array(scratch.arena, cb_node_t*, func->next_id);
 
   stack[stack_count++] = func->end;
+  bitset_set(visited, func->end->id);
 
   while (stack_count) {
     cb_node_t* node = stack[--stack_count];

@@ -5,6 +5,7 @@
 
 #include "base.h"
 #include "token_kind.h"
+#include "back/cb.h"
 
 typedef struct {
   int kind;
@@ -84,9 +85,16 @@ typedef enum {
   SEM_INST_FLAG_HIDE_FROM_DUMP = BIT(0),
 } sem_inst_flags_t;
 
+typedef enum {
+  SEM_BLOCK_FLAG_NONE = 0,
+  SEM_BLOCK_FLAG_CONTAINS_USER_CODE = BIT(0)
+} sem_block_flags_t;
+
 typedef struct {
   sem_inst_kind_t kind;
   sem_inst_flags_t flags;
+  
+  token_t token;
 
   int num_ins;
   sem_value_t ins[SEM_MAX_INS];
@@ -100,7 +108,10 @@ typedef struct sem_func_t sem_func_t;
 
 struct sem_block_t {
   int temp_id;
+
   sem_block_t* next;
+  sem_block_flags_t flags; 
+
   vec_t(sem_inst_t) code;
 };
 
@@ -116,6 +127,11 @@ struct sem_func_t {
 typedef struct {
   sem_func_t* funcs;
 } sem_unit_t;
+
+typedef struct {
+  int count;
+  sem_block_t* blocks[2];
+} sem_successors_t;
 
 token_t lexer_next(lexer_t* l);
 
@@ -136,3 +152,11 @@ void _parse_children_next(parse_child_iter_t* it);
 
 sem_unit_t* check_unit(arena_t* arena, char* path, char* source, parse_tree_t* tree);
 void sem_dump_unit(FILE* stream, sem_unit_t* unit);
+
+int sem_assign_block_temp_ids(sem_block_t* head);
+
+sem_successors_t sem_compute_successors(sem_block_t* block);
+
+bool sem_analyze(char* path, char* source, sem_func_t* func);
+
+cb_func_t* sem_lower(arena_t* arena, sem_func_t* sem_func);

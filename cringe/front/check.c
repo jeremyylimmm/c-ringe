@@ -170,12 +170,13 @@ static sem_value_t new_value(checker_t* c, sem_block_t* block, int inst) {
   return c->cur_func->next_value++;
 }
 
-static void make_inst_in_block(checker_t* c, sem_block_t* block, sem_inst_kind_t kind, bool has_out, int num_ins, void* data) {
+static void make_inst_in_block(checker_t* c, sem_block_t* block, sem_inst_kind_t kind, token_t token, bool has_out, int num_ins, void* data) {
   assert(num_ins <= SEM_MAX_INS);
 
   sem_inst_t inst = {
     .kind = kind,
     .data = data,
+    .token = token,
     .num_ins = num_ins
   };
 
@@ -190,10 +191,19 @@ static void make_inst_in_block(checker_t* c, sem_block_t* block, sem_inst_kind_t
   }
 
   vec_put(block->code, inst);
+
+  switch (kind) {
+    default:
+      block->flags |= SEM_BLOCK_FLAG_CONTAINS_USER_CODE;
+      break;
+      
+    case SEM_INST_GOTO:
+      break;
+  }
 }
 
-static void make_inst(checker_t* c, sem_inst_kind_t kind, bool has_out, int num_ins, void* data) {
-  make_inst_in_block(c, c->cur_block, kind, has_out, num_ins, data);
+static void make_inst(checker_t* c, sem_inst_kind_t kind, token_t token, bool has_out, int num_ins, void* data) {
+  make_inst_in_block(c, c->cur_block, kind, token, has_out, num_ins, data);
 }
 
 static void push_block(checker_t* c, sem_block_t* block) {
@@ -230,7 +240,7 @@ static bool fn_check_INTEGER(checker_t* c, parse_node_t* node) {
     value += token.start[i] - '0';
   }
 
-  make_inst(c, SEM_INST_INT_CONST, true, 0, (void*)value);
+  make_inst(c, SEM_INST_INT_CONST, token, true, 0, (void*)value);
 
   return true;
 }
@@ -244,39 +254,39 @@ static bool fn_check_IDENTIFIER(checker_t* c, parse_node_t* node) {
 
   if (!address) {
     error(c, name_tok, "symbol does not exist");
-    make_inst(c, SEM_INST_POISON, true, 0, NULL);
+    make_inst(c, SEM_INST_POISON, name_tok, true, 0, NULL);
     return false;
   }
 
   push_value(c, address);
-  make_inst(c, SEM_INST_LOAD, true, 1, NULL);
+  make_inst(c, SEM_INST_LOAD, name_tok, true, 1, NULL);
 
   return true;
 }
 
-static bool gen_binary(checker_t* c, sem_inst_kind_t kind) {
-  make_inst(c, kind, true, 2, NULL);
+static bool gen_binary(checker_t* c, sem_inst_kind_t kind, token_t token) {
+  make_inst(c, kind, token, true, 2, NULL);
   return true;
 }
 
 static bool fn_check_ADD(checker_t* c, parse_node_t* node) {
   (void)node;
-  return gen_binary(c, SEM_INST_ADD);
+  return gen_binary(c, SEM_INST_ADD, get_token(c, node));
 }
 
 static bool fn_check_SUB(checker_t* c, parse_node_t* node) {
   (void)node;
-  return gen_binary(c, SEM_INST_SUB);
+  return gen_binary(c, SEM_INST_SUB, get_token(c, node));
 }
 
 static bool fn_check_MUL(checker_t* c, parse_node_t* node) {
   (void)node;
-  return gen_binary(c, SEM_INST_MUL);
+  return gen_binary(c, SEM_INST_MUL, get_token(c, node));
 }
 
 static bool fn_check_DIV(checker_t* c, parse_node_t* node) {
   (void)node;
-  return gen_binary(c, SEM_INST_DIV);
+  return gen_binary(c, SEM_INST_DIV, get_token(c, node));
 }
 
 static sem_value_t* peek_value(checker_t* c, int offset) {
@@ -306,7 +316,7 @@ static bool fn_check_ASSIGN(checker_t* c, parse_node_t* node) {
   *p_left = inst->ins[0]; // replace with load address - should be safe to do because no common subexpressions - shit is a tree
   inst->flags |= SEM_INST_FLAG_HIDE_FROM_DUMP; // load isn't used - delete for clarity?
 
-  make_inst(c, SEM_INST_STORE, false, 2, NULL);
+  make_inst(c, SEM_INST_STORE, get_token(c, node), false, 2, NULL);
   push_value(c, right);
 
   return true;
@@ -338,7 +348,7 @@ static bool fn_check_RETURN(checker_t* c, parse_node_t* node) {
 
     case 0:
     case 1:
-      make_inst(c, SEM_INST_RETURN, false, node->children_count, NULL);
+      make_inst(c, SEM_INST_RETURN, get_token(c, node), false, node->children_count, NULL);
       new_block(c);
       return true;
   }
@@ -347,12 +357,12 @@ static bool fn_check_RETURN(checker_t* c, parse_node_t* node) {
 static bool fn_check_LOCAL_DECL(checker_t* c, parse_node_t* node) {
   (void)node;
 
-  make_inst(c, SEM_INST_ALLOCA, true, 0, NULL);
-  sem_value_t value = *peek_value(c, 0);
-
   parse_node_t* name_node = &c->tree->nodes[c->i++];
   token_t name_token = get_token(c, name_node);
   string_view_t name = token_to_string_view(name_token);
+
+  make_inst(c, SEM_INST_ALLOCA, name_token, true, 0, NULL);
+  sem_value_t value = *peek_value(c, 0);
 
   if (scope_find(c, name, true)) {
     error(c, name_token, "this name clashes with another symbol in the current scope");
@@ -364,15 +374,15 @@ static bool fn_check_LOCAL_DECL(checker_t* c, parse_node_t* node) {
   return true;
 }
 
-static sem_block_t** make_branch(checker_t* c, sem_block_t* from) {
+static sem_block_t** make_branch(checker_t* c, token_t token, sem_block_t* from) {
   sem_block_t** locs = arena_array(c->arena, sem_block_t*, 2);
-  make_inst_in_block(c, from, SEM_INST_BRANCH, false, 1, locs);
+  make_inst_in_block(c, from, SEM_INST_BRANCH, token, false, 1, locs);
   return locs;
 }
 
-static void generate_branch_and_body(checker_t* c) {
+static void generate_branch_and_body(checker_t* c, token_t token) {
   sem_block_t* head_tail = c->cur_block;
-  sem_block_t** locs = make_branch(c, head_tail);
+  sem_block_t** locs = make_branch(c, token, head_tail);
 
   push_block(c, head_tail); // needed to be able to patch branch
   locs[0] = new_block(c);
@@ -380,12 +390,12 @@ static void generate_branch_and_body(checker_t* c) {
 
 static bool fn_check_IF_INTRO(checker_t* c, parse_node_t* node) {
   (void)node;
-  generate_branch_and_body(c);
+  generate_branch_and_body(c, get_token(c, node));
   return true;
 }
 
-static void make_goto(checker_t* c, sem_block_t* from, sem_block_t* to) {
-  make_inst_in_block(c, from, SEM_INST_GOTO, false, 0, to);
+static void make_goto(checker_t* c, token_t token, sem_block_t* from, sem_block_t* to) {
+  make_inst_in_block(c, from, SEM_INST_GOTO, token, false, 0, to);
 }
 
 static void pop_and_patch_branch_else(checker_t* c, sem_block_t* loc) {
@@ -401,7 +411,7 @@ static bool fn_check_IF(checker_t* c, parse_node_t* node) {
   sem_block_t* end_head = new_block(c);
 
   pop_and_patch_branch_else(c, end_head);
-  make_goto(c, body_tail, end_head);
+  make_goto(c, get_token(c, node), body_tail, end_head);
 
   return true;
 }
@@ -426,27 +436,24 @@ static bool fn_check_IF_ELSE(checker_t* c, parse_node_t* node) {
 
   sem_block_t* end_head = new_block(c);
 
-  make_goto(c, body_tail, end_head);
-  make_goto(c, else_tail, end_head);
+  make_goto(c, get_token(c, node), body_tail, end_head);
+  make_goto(c, get_token(c, node), else_tail, end_head);
 
   return true;
 }
 
 static bool fn_check_WHILE_INTRO(checker_t* c, parse_node_t* node) {
-  (void)node;
-
   sem_block_t* entry = c->cur_block;
   sem_block_t* head_head = new_block(c);
 
-  make_goto(c, entry, head_head);
+  make_goto(c, get_token(c, node), entry, head_head);
   push_block(c, head_head); // needed to be able to jump back to head-head
 
   return true;
 }
 
 static bool fn_check_WHILE_COND(checker_t* c, parse_node_t* node) {
-  (void)node;
-  generate_branch_and_body(c);
+  generate_branch_and_body(c, get_token(c, node));
   return true;
 }
 
@@ -459,7 +466,7 @@ static bool fn_check_WHILE(checker_t* c, parse_node_t* node) {
   pop_and_patch_branch_else(c, end_head);
 
   sem_block_t* head_head = pop_block(c);
-  make_goto(c, body_tail, head_head);
+  make_goto(c, get_token(c, node), body_tail, head_head);
 
   return true;
 }
@@ -581,6 +588,16 @@ sem_unit_t* check_unit(arena_t* arena, char* path, char* source, parse_tree_t* t
   return unit;
 }
 
+int sem_assign_block_temp_ids(sem_block_t* head) {
+  int block_count = 0;
+
+  foreach_list(sem_block_t, b, head) {
+    b->temp_id = block_count++;
+  }
+
+  return block_count;
+}
+
 static void dump_block(FILE* stream, sem_block_t* b) {
   for (int i = 0; i < vec_len(b->code); ++i) {
     sem_inst_t* inst = b->code + i;
@@ -627,10 +644,7 @@ static void dump_block(FILE* stream, sem_block_t* b) {
 static void dump_func(FILE* stream, sem_func_t* func) {
   fprintf(stream, "fn %s {\n", func->name);
 
-  int block_count = 0;
-  foreach_list(sem_block_t, b, func->cfg) {
-    b->temp_id = block_count++;
-  }
+  sem_assign_block_temp_ids(func->cfg);
 
   foreach_list(sem_block_t, b, func->cfg) {
     fprintf(stream, "bb_%d:\n", b->temp_id);
@@ -645,4 +659,78 @@ void sem_dump_unit(FILE* stream, sem_unit_t* unit) {
   foreach_list(sem_func_t, func, unit->funcs) {
     dump_func(stream, func);
   }
+}
+
+sem_successors_t sem_compute_successors(sem_block_t* block) {
+  sem_successors_t result = {0};
+
+  if (vec_len(block->code) > 0) {
+    sem_inst_t* inst = &vec_back(block->code);
+
+    switch (inst->kind) {
+      case SEM_INST_GOTO:
+        result.blocks[result.count++] = inst->data;
+        break;
+      case SEM_INST_BRANCH: {
+        sem_block_t** locs = inst->data;
+        result.blocks[result.count++] = locs[0];
+        result.blocks[result.count++] = locs[1];
+      } break;
+    }
+  }
+
+  return result;
+}
+
+bool sem_analyze(char* path, char* source, sem_func_t* func) {
+  scratch_t scratch = scratch_get(0, NULL);
+
+  int block_count = sem_assign_block_temp_ids(func->cfg);
+  uint64_t* reachable = bitset_alloc(scratch.arena, block_count);
+  
+  int stack_count = 0;
+  sem_block_t** stack = arena_array(scratch.arena, sem_block_t*, block_count);
+
+  stack[stack_count++] = func->cfg;
+  bitset_set(reachable, func->cfg->temp_id);
+
+  while (stack_count) {
+    sem_block_t* block = stack[--stack_count];
+
+    sem_successors_t succ = sem_compute_successors(block);
+
+    for (int i = 0; i < succ.count; ++i) {
+      sem_block_t* s = succ.blocks[i];
+
+      if (bitset_get(reachable, s->temp_id)) {
+        continue;
+      }
+
+      stack[stack_count++] = s;
+
+      bitset_set(reachable, s->temp_id);
+    } 
+  }
+
+  bool success = true;
+
+  for (sem_block_t** pb = &func->cfg; *pb;) {
+    sem_block_t* b = *pb;
+
+    if (bitset_get(reachable, b->temp_id)) {
+      pb = &b->next;
+    }
+    else {
+      if (b->flags & SEM_BLOCK_FLAG_CONTAINS_USER_CODE) {
+        error_at_token(path, source, b->code[0].token, "unreachable code");
+        success = false;
+      }
+
+      *pb = b->next;
+    }
+  }
+
+  scratch_release(&scratch);
+
+  return success;
 }

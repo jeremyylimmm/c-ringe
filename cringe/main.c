@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "base.h"
 #include "front/front.h"
@@ -38,20 +39,38 @@ int main() {
     return 1;
   }
 
+  printf("Pre-analysis\n");
   sem_dump_unit(stdout, sem_unit);
 
-  {
-    cb_func_t* func = cb_new_func(arena);
-    
-    cb_node_start_result_t start = cb_node_start(func);
-    cb_node_t* value = cb_node_constant(func, 69);
+  bool success = true;
 
-    cb_node_end(func, start.start_ctrl, start.start_mem, value);
-
-    cb_finalize_func(func);
-
-    cb_graphviz_func(stdout, func);
+  foreach_list(sem_func_t, func, sem_unit->funcs) {
+    success &= sem_analyze(path, source, func);
   }
+
+  if (!success) {
+    return 1;
+  }
+
+  printf("Post-analysis\n");
+  sem_dump_unit(stdout, sem_unit);
+
+  sem_func_t* main = NULL;
+
+  foreach_list(sem_func_t, sem_func, sem_unit->funcs) {
+    if (strcmp(sem_func->name, "main") == 0) {
+      main = sem_func;
+      break;
+    }
+  }
+
+  if (!main) {
+    printf("No main func!\n");
+    return 1;
+  }
+
+  cb_func_t* cb_func = sem_lower(arena, main);
+  cb_graphviz_func(stdout, cb_func);
 
   return 0;
 }

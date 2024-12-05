@@ -7,6 +7,10 @@ X(END, "end")
 X(REGION, "region")
 X(PHI, "phi")
 
+X(NULL, "null")
+
+X(ALLOCA, "alloca")
+
 X(BRANCH, "branch")
 X(BRANCH_TRUE, "true")
 X(BRANCH_FALSE, "false")

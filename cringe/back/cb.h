@@ -73,6 +73,10 @@ cb_node_t* cb_node_end(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node
 cb_node_t* cb_node_region(cb_func_t* func);
 cb_node_t* cb_node_phi(cb_func_t* func);
 
+cb_node_t* cb_node_null(cb_func_t* func);
+
+cb_node_t* cb_node_alloca(cb_func_t* func);
+
 cb_node_branch_result_t cb_node_branch(cb_func_t* func, cb_node_t* ctrl, cb_node_t* predicate);
 
 cb_node_t* cb_node_constant(cb_func_t* func, uint64_t value);
