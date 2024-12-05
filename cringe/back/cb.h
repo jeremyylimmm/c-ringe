@@ -21,7 +21,8 @@ typedef enum {
   CB_NODE_FLAG_NONE = 0,
   CB_NODE_FLAG_IS_LEAF = BIT(0),
   CB_NODE_FLAG_IS_PROJ = BIT(1),
-  CB_NODE_FLAG_IS_CFG = BIT(2)
+  CB_NODE_FLAG_IS_CFG = BIT(2),
+  CB_NODE_FLAG_READS_MEMORY = BIT(3)
 } cb_node_flags_t;
 
 struct cb_node_t {

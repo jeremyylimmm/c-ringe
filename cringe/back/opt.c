@@ -279,16 +279,7 @@ static void replace_node(cb_opt_context_t* opt, cb_node_t* target, cb_node_t* so
   remove_node(opt, target);
 }
 
-void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func) {
-  scratch_t scratch = scratch_get(0, NULL);
-  reset_context(opt, func);
-
-  func_walk_t walk = func_walk_unspecified_order(scratch.arena, func);
-
-  for (size_t i = 0; i < walk.len; ++i) {
-    worklist_add(opt, walk.nodes[i]);
-  }
-
+static void peepholes(cb_opt_context_t* opt) {
   while (!worklist_empty(opt)) {
     cb_node_t* node = worklist_pop(opt);
     idealize_func_t idealize = idealize_table[node->kind];
@@ -305,6 +296,116 @@ void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func) {
 
     replace_node(opt, node, ideal);
   }
+}
+
+typedef struct {
+  size_t count;
+  cb_node_t** nodes;
+} mem_deps_t;
+
+static mem_deps_t get_mem_deps(arena_t* arena, cb_node_t* node) {
+  mem_deps_t result = {0};
+  result.nodes = arena_array(arena, cb_node_t*, node->num_ins);
+
+  static_assert(NUM_CB_NODE_KINDS == 19, "handle memory dependencies");
+  switch (node->kind) {
+
+    case CB_NODE_PHI: {
+      for (int i = 1; i < node->num_ins; ++i) {
+        result.nodes[result.count++] = node->ins[i];
+      }
+    } break;
+
+    case CB_NODE_LOAD: {
+      result.nodes[result.count++] = node->ins[LOAD_MEM];
+    } break;
+
+    case CB_NODE_STORE: {
+      result.nodes[result.count++] = node->ins[STORE_MEM];
+    } break;
+
+    case CB_NODE_END: {
+      result.nodes[result.count++] = node->ins[END_MEM];
+    } break;
+  }
+
+  return result;
+}
+
+typedef enum {
+  DSE_NO_LOADS,
+  DSE_LOADS,
+} dse_state_t;
+
+static void dead_store_elim(cb_opt_context_t* opt) {
+  scratch_t scratch = scratch_get(0, NULL);
+
+  dse_state_t* states = arena_array(scratch.arena, dse_state_t, opt->func->next_id);
+
+  int store_count = 0;
+  cb_node_t** stores = arena_array(scratch.arena, cb_node_t*, opt->func->next_id);
+
+  vec_clear(opt->stack);
+
+  func_walk_t walk = func_walk_unspecified_order(scratch.arena, opt->func);
+
+  // look for all nodes that read memory - add them to stack
+  // look for all stores - record them so we can potentially eliminate them
+  for (size_t i = 0; i < walk.len; ++i) {
+    cb_node_t* node = walk.nodes[i];
+
+    if (node->flags & CB_NODE_FLAG_READS_MEMORY) {
+      vec_put(opt->stack, stack_item(false, node));
+    }
+
+    if (node->kind == CB_NODE_STORE) {
+      stores[store_count++] = node;
+    }
+  }
+
+  // walk up dependency chains recording whether memory effects are observed
+  while (vec_len(opt->stack)) {
+    cb_node_t* node = vec_pop(opt->stack).node;
+
+    if (states[node->id] == DSE_LOADS) {
+      continue;
+    }
+
+    states[node->id] = DSE_LOADS;
+
+    mem_deps_t deps = get_mem_deps(scratch.arena, node);
+
+    for (size_t i = 0; i < deps.count; ++i) {
+      vec_put(opt->stack, stack_item(false, deps.nodes[i]));
+    }
+  }
+
+  // remove any stores that don't have observable effects
+  for (int i = 0; i < store_count; ++i) {
+    cb_node_t* store = stores[i];
+
+    if (states[store->id] == DSE_NO_LOADS) {
+      replace_node(opt, store, store->ins[STORE_MEM]);
+    }
+  }
+
+  scratch_release(&scratch);
+}
+
+void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func) {
+  scratch_t scratch = scratch_get(0, NULL);
+  reset_context(opt, func);
+
+  func_walk_t walk = func_walk_unspecified_order(scratch.arena, func);
+
+  for (size_t i = 0; i < walk.len; ++i) {
+    worklist_add(opt, walk.nodes[i]);
+  }
+
+  do {
+    peepholes(opt);
+    dead_store_elim(opt);
+  } while (!worklist_empty(opt));
 
   scratch_release(&scratch);
 }
