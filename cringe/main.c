@@ -69,7 +69,10 @@ int main() {
     return 1;
   }
 
+  cb_opt_context_t* opt = cb_new_opt_context();
+
   cb_func_t* cb_func = sem_lower(arena, main);
+  cb_opt_func(opt, cb_func);
   cb_graphviz_func(stdout, cb_func);
 
   return 0;

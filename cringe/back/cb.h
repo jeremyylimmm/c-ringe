@@ -7,10 +7,12 @@
 typedef enum {
   CB_NODE_UNINITIALIZED,
   #include "node_kind.def"
+  NUM_CB_NODE_KINDS,
 } cb_node_kind_t;
 #undef X
 
 typedef struct cringe_arena_t cb_arena_t;
+typedef struct cb_opt_context_t cb_opt_context_t; // exists to prevent constant reallocation of dynamic arrays
 
 typedef struct cb_node_t cb_node_t;
 typedef struct cb_use_t cb_use_t;
@@ -95,3 +97,8 @@ void cb_set_phi_ins(cb_func_t* func, cb_node_t* phi, cb_node_t* region, int num_
 void cb_finalize_func(cb_func_t* func);
 
 void cb_graphviz_func(FILE* stream, cb_func_t* func);
+
+cb_opt_context_t* cb_new_opt_context();
+void cb_free_opt_context(cb_opt_context_t* opt);
+
+void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func);
