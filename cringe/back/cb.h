@@ -76,6 +76,8 @@ struct cb_block_t {
 
   int predecessor_count;
   cb_block_t** predecessors;
+
+  cb_block_t* idom;
 };
 
 cb_arena_t* cb_new_arena();

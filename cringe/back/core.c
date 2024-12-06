@@ -114,10 +114,13 @@ cb_node_branch_result_t cb_node_branch(cb_func_t* func, cb_node_t* ctrl, cb_node
   cb_node_t* branch = new_node(func, CB_NODE_BRANCH, NUM_BRANCH_INS, 0, CB_NODE_FLAG_IS_CFG);
   set_input(func, branch, ctrl, BRANCH_CTRL);
   set_input(func, branch, predicate, BRANCH_PREDICATE);
+
+  cb_node_t* branch_false = new_proj(func, CB_NODE_BRANCH_FALSE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK);
+  cb_node_t* branch_true = new_proj(func, CB_NODE_BRANCH_TRUE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK);
   
   return (cb_node_branch_result_t) {
-    .branch_true = new_proj(func, CB_NODE_BRANCH_TRUE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK),
-    .branch_false = new_proj(func, CB_NODE_BRANCH_FALSE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK),
+    .branch_true = branch_true,
+    .branch_false = branch_false,
   };
 }
 
