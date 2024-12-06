@@ -22,7 +22,8 @@ typedef enum {
   CB_NODE_FLAG_IS_LEAF = BIT(0),
   CB_NODE_FLAG_IS_PROJ = BIT(1),
   CB_NODE_FLAG_IS_CFG = BIT(2),
-  CB_NODE_FLAG_READS_MEMORY = BIT(3)
+  CB_NODE_FLAG_READS_MEMORY = BIT(3),
+  CB_NODE_FLAG_STARTS_BASIC_BLOCK = BIT(4)
 } cb_node_flags_t;
 
 struct cb_node_t {
@@ -65,6 +66,18 @@ typedef struct {
   cb_node_t* _parent;
 } cb_ins_iterator_t;
 
+typedef struct cb_block_t cb_block_t;
+struct cb_block_t {
+  int id;
+  cb_block_t* next;
+
+  int successor_count;
+  cb_block_t* successors[2];
+
+  int predecessor_count;
+  cb_block_t** predecessors;
+};
+
 cb_arena_t* cb_new_arena();
 void cb_free_arena(cb_arena_t* arena);
 
@@ -103,3 +116,5 @@ cb_opt_context_t* cb_new_opt_context();
 void cb_free_opt_context(cb_opt_context_t* opt);
 
 void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func);
+
+void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func);

@@ -70,7 +70,7 @@ static cb_node_t* new_proj(cb_func_t* func, cb_node_kind_t kind, cb_node_t* inpu
 }
 
 cb_node_start_result_t cb_node_start(cb_func_t* func) {
-  cb_node_t* start = new_node(func, CB_NODE_START, 0, 0, CB_NODE_FLAG_IS_CFG);
+  cb_node_t* start = new_node(func, CB_NODE_START, 0, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK);
 
   assert(func->start == NULL);
   func->start = start;
@@ -95,7 +95,7 @@ cb_node_t* cb_node_end(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node
 }
 
 cb_node_t* cb_node_region(cb_func_t* func) {
-  return new_node(func, CB_NODE_REGION, 0, 0, CB_NODE_FLAG_IS_CFG);
+  return new_node(func, CB_NODE_REGION, 0, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK);
 }
 
 cb_node_t* cb_node_phi(cb_func_t* func) {
@@ -116,8 +116,8 @@ cb_node_branch_result_t cb_node_branch(cb_func_t* func, cb_node_t* ctrl, cb_node
   set_input(func, branch, predicate, BRANCH_PREDICATE);
   
   return (cb_node_branch_result_t) {
-    .branch_true = new_proj(func, CB_NODE_BRANCH_TRUE, branch, CB_NODE_FLAG_IS_CFG),
-    .branch_false = new_proj(func, CB_NODE_BRANCH_FALSE, branch, CB_NODE_FLAG_IS_CFG),
+    .branch_true = new_proj(func, CB_NODE_BRANCH_TRUE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK),
+    .branch_false = new_proj(func, CB_NODE_BRANCH_FALSE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK),
   };
 }
 

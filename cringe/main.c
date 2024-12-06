@@ -75,5 +75,7 @@ int main() {
   cb_opt_func(opt, cb_func);
   cb_graphviz_func(stdout, cb_func);
 
+  cb_run_global_code_motion(arena, cb_func);
+
   return 0;
 }
