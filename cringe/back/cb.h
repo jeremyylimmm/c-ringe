@@ -78,6 +78,8 @@ struct cb_block_t {
   cb_block_t** predecessors;
 
   cb_block_t* idom;
+  int dom_children_count;
+  cb_block_t** dom_children;
 };
 
 cb_arena_t* cb_new_arena();

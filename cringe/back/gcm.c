@@ -167,10 +167,35 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
   cfg_head->idom = NULL;
 
   foreach_list (cb_block_t, b, cfg_head) {
+    if (b->idom) {
+      b->idom->dom_children_count++;
+    }
+  }
+
+  foreach_list (cb_block_t, b, cfg_head) {
+    b->dom_children = arena_array(arena, cb_block_t*, b->dom_children_count);
+    b->dom_children_count = 0;
+  }
+
+  foreach_list (cb_block_t, b, cfg_head) {
+    cb_block_t* idom = b->idom;
+
+    if (idom) {
+      idom->dom_children[idom->dom_children_count++] = b;
+    }
+  }
+
+  foreach_list (cb_block_t, b, cfg_head) {
     printf("bb_%d:\n", b->id);
+
     printf("  idom:\n");
     if (b->idom) {
       printf("    bb_%d\n", b->idom->id);
+    }
+
+    printf("  dom_children:\n");
+    for (int i = 0; i < b->dom_children_count; ++i) {
+      printf("    bb_%d\n", b->dom_children[i]->id);
     }
   }
 
