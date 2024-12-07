@@ -82,7 +82,10 @@ struct cb_block_t {
   int dom_children_count;
   cb_block_t** dom_children;
 
+  uint64_t* dom_set;
   int dom_depth;
+
+  int loop_nesting;
 };
 
 cb_arena_t* cb_new_arena();

@@ -91,6 +91,18 @@ inline uint64_t* bitset_alloc(arena_t* arena, size_t bit_count) {
   return arena_array(arena, uint64_t, bitset_u64_count(bit_count));
 }
 
+inline void bitset_clear(uint64_t* bs, size_t bit_count) {
+  memset(bs, 0, bitset_u64_count(bit_count) * sizeof(uint64_t));
+}
+
+inline void bitset_or(uint64_t* target, uint64_t* source, size_t bit_count) {
+  size_t c = bitset_u64_count(bit_count);
+
+  for (size_t i = 0; i < c; ++i) {
+    target[i] |= source[i];
+  }
+}
+
 typedef struct {
   size_t len;
   char* str;

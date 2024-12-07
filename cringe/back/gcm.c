@@ -118,21 +118,88 @@ static void build_dominator_tree(arena_t* arena, cb_block_t* cfg_head) {
   }
 
   // calculate dominator tree depth
+  // fill dom sets
 
+  vec_t(cb_block_t*) stack = NULL;
+
+  vec_put(stack, cfg_head);
+
+  while (vec_len(stack)) {
+    cb_block_t* b = vec_pop(stack);
+
+    if (!b->dom_set) {
+      b->dom_set = bitset_alloc(arena, block_count);
+
+      if (b->idom) {
+        b->dom_depth = b->idom->dom_depth + 1;
+      }
+
+      vec_put(stack, b);
+
+      for (int i = 0; i < b->dom_children_count; ++i) {
+        vec_put(stack, b->dom_children[i]);
+      }
+    }
+    else {
+      for (int i = 0; i < b->dom_children_count; ++i) {
+        bitset_or(b->dom_set, b->dom_children[i]->dom_set, block_count);
+      }
+
+      bitset_set(b->dom_set, b->id); // every node dominates itself
+    }
+  }
+
+  vec_free(stack);
+  scratch_release(&scratch);
+}
+
+static void process_backedge(uint64_t* visited, cb_block_t** stack, int block_count, cb_block_t* from, cb_block_t* to) {
+  bitset_clear(visited, block_count);
+  
   int stack_count = 0;
-  cb_block_t** stack = arena_array(scratch.arena, cb_block_t*, block_count);
+  stack[stack_count++] = from;
+  bitset_set(visited, from->id);
 
-  stack[stack_count++] = cfg_head;
+  // to dominates from, walk up graph to find loop
 
   while (stack_count) {
-    cb_block_t* b = stack[--stack_count];
+    cb_block_t* block = stack[--stack_count];
 
-    if (b->idom) {
-      b->dom_depth = b->idom->dom_depth + 1;
+    block->loop_nesting++;
+
+    if (block == to) {
+      continue;
     }
 
-    for (int i = 0; i < b->dom_children_count; ++i) {
-      stack[stack_count++] = b->dom_children[i];
+    for (int i = 0; i < block->predecessor_count; ++i) {
+      cb_block_t* p = block->predecessors[i];
+
+      if (bitset_get(visited, p->id)) {
+        continue;
+      }
+
+      stack[stack_count++] = p;
+
+      bitset_set(visited, p->id);
+    }
+  }
+}
+
+// we'll use this info to influence where nodes are scheduled
+// TODO: handle non-natural loops????
+static void compute_loop_nesting(int block_count, cb_block_t* cfg_head) {
+  scratch_t scratch = scratch_get(0, NULL);
+
+  uint64_t* visited = bitset_alloc(scratch.arena, block_count);
+  cb_block_t** stack = arena_array(scratch.arena, cb_block_t*, block_count);
+
+  foreach_list (cb_block_t, a, cfg_head) {
+    for (int i = 0; i < a->successor_count; ++i) {
+      cb_block_t* b = a->successors[i];
+
+      if (bitset_get(b->dom_set, a->id)) {
+        process_backedge(visited, stack, block_count, a, b);
+      }
     }
   }
 
@@ -232,6 +299,7 @@ static cb_block_t* build_cfg(arena_t* arena, cb_block_t** block_map, cb_func_t* 
   }
 
   build_dominator_tree(arena, cfg_head);
+  compute_loop_nesting(next_block_id, cfg_head);
   
   vec_free(stack);
   scratch_release(&scratch);
@@ -443,6 +511,9 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
   foreach_list (cb_block_t, b, cfg_head) {
     printf("bb_%d:\n", b->id);
 
+    printf("  loop_nesting:\n");
+    printf("    %d\n", b->loop_nesting);
+
     for (size_t i = 0; i < vec_len(shit[b->id]); ++i) {
       cb_node_t* node = shit[b->id][i];
       printf("  _%d = %s ", node->id, node_kind_label[node->kind]);
@@ -462,6 +533,10 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
       }
      
       printf("\n");
+    }
+
+    if (b->successor_count == 1) {
+      printf("  goto bb_%d\n", b->successors[0]->id);
     }
   }
 
