@@ -23,7 +23,8 @@ typedef enum {
   CB_NODE_FLAG_IS_PROJ = BIT(1),
   CB_NODE_FLAG_IS_CFG = BIT(2),
   CB_NODE_FLAG_READS_MEMORY = BIT(3),
-  CB_NODE_FLAG_STARTS_BASIC_BLOCK = BIT(4)
+  CB_NODE_FLAG_STARTS_BASIC_BLOCK = BIT(4),
+  CB_NODE_FLAG_IS_PINNED = BIT(5),
 } cb_node_flags_t;
 
 struct cb_node_t {
@@ -80,6 +81,8 @@ struct cb_block_t {
   cb_block_t* idom;
   int dom_children_count;
   cb_block_t** dom_children;
+
+  int dom_depth;
 };
 
 cb_arena_t* cb_new_arena();

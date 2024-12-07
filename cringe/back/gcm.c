@@ -10,10 +10,22 @@ typedef struct {
   cb_node_t* node;
 } cfg_build_item_t;
 
+typedef struct {
+  bool processed;
+  cb_node_t* node;
+} sched_item_t;
+
 static cfg_build_item_t cfg_build_item(bool outs_processed, cb_block_t* parent_block, cb_node_t* node) {
   return (cfg_build_item_t) {
     .outs_processed = outs_processed,
     .parent_block = parent_block,
+    .node = node
+  };
+}
+
+static sched_item_t sched_item(bool processed, cb_node_t* node) {
+  return (sched_item_t) {
+    .processed = processed,
     .node = node
   };
 }
@@ -32,20 +44,113 @@ static cb_block_t* intersect(cb_block_t* f1, cb_block_t* f2) {
   return f1;
 }
 
-void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
+static void build_dominator_tree(arena_t* arena, cb_block_t* cfg_head) {
   scratch_t scratch = scratch_get(1, &arena);
 
+  // make dominance tree
+  // goated paper: https://www.cs.tufts.edu/~nr/cs257/archive/keith-cooper/dom14.pdf
+
+  cfg_head->idom = cfg_head;
+
+  for (;;) {
+    bool changed = false;
+
+    foreach_list(cb_block_t, b, cfg_head->next) {// skip start
+      cb_block_t* first = NULL;
+
+      for (int i = 0; i < b->predecessor_count; ++i) {
+        cb_block_t* p = b->predecessors[i];
+
+        if (p->idom) {
+          first = p;
+          break;
+        }
+      }
+
+      assert(first != NULL);
+      cb_block_t* new_idom = first;;
+
+      for (int i = 0; i < b->predecessor_count; ++i) {
+        cb_block_t* p = b->predecessors[i];
+        if (p == first) {
+          continue;
+        }
+
+        if (p->idom) {
+          new_idom = intersect(p, new_idom);
+        }
+      }
+
+      if (b->idom != new_idom) {
+        b->idom = new_idom;
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      break;
+    }
+  }
+
+  cfg_head->idom = NULL;
+
+  int block_count = 0;
+
+  foreach_list (cb_block_t, b, cfg_head) {
+    block_count++;
+
+    if (b->idom) {
+      b->idom->dom_children_count++;
+    }
+  }
+
+  foreach_list (cb_block_t, b, cfg_head) {
+    b->dom_children = arena_array(arena, cb_block_t*, b->dom_children_count);
+    b->dom_children_count = 0;
+  }
+
+  foreach_list (cb_block_t, b, cfg_head) {
+    cb_block_t* idom = b->idom;
+
+    if (idom) {
+      idom->dom_children[idom->dom_children_count++] = b;
+    }
+  }
+
+  // calculate dominator tree depth
+
+  int stack_count = 0;
+  cb_block_t** stack = arena_array(scratch.arena, cb_block_t*, block_count);
+
+  stack[stack_count++] = cfg_head;
+
+  while (stack_count) {
+    cb_block_t* b = stack[--stack_count];
+
+    if (b->idom) {
+      b->dom_depth = b->idom->dom_depth + 1;
+    }
+
+    for (int i = 0; i < b->dom_children_count; ++i) {
+      stack[stack_count++] = b->dom_children[i];
+    }
+  }
+
+  scratch_release(&scratch);
+}
+
+static cb_block_t* build_cfg(arena_t* arena, cb_block_t** block_map, cb_func_t* func) {
   // first we traverse the implicit control-flow graph within the sea of nodes
   // and build an explicit control flow graph with basic blocks
 
-  cb_block_t** block_map = arena_array(scratch.arena, cb_block_t*, func->next_id);
+  scratch_t scratch = scratch_get(1, &arena);
+
+  cb_block_t* cfg_head = NULL;
 
   vec_t(cfg_build_item_t) stack = NULL;
   uint64_t* visited = bitset_alloc(scratch.arena, func->next_id);
 
   vec_put(stack, cfg_build_item(false, NULL, func->start));
-
-  cb_block_t* cfg_head = NULL;
 
   while (vec_len(stack)) {
     cfg_build_item_t item = vec_pop(stack);
@@ -66,10 +171,17 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
 
       block_map[node->id] = block;
 
+      if (!(node->flags & CB_NODE_FLAG_IS_CFG)) {
+        continue;
+      }
+
       vec_put(stack, cfg_build_item(true, item.parent_block, node));
 
       foreach_list(cb_use_t, use, node->uses) {
-        if (!(use->node->flags & CB_NODE_FLAG_IS_CFG)) {
+        bool is_cfg = (use->node->flags & CB_NODE_FLAG_IS_CFG) != 0;
+        bool is_pinned = (use->node->flags & CB_NODE_FLAG_IS_PINNED) != 0;
+
+        if (!is_cfg && !is_pinned) {
           continue;
         }
 
@@ -119,89 +231,136 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
     }
   }
 
-  // make dominance tree
-  // goated paper: https://www.cs.tufts.edu/~nr/cs257/archive/keith-cooper/dom14.pdf
+  build_dominator_tree(arena, cfg_head);
+  
+  vec_free(stack);
+  scratch_release(&scratch);
+  return cfg_head;
+}
 
-  cfg_head->idom = cfg_head;
+static func_walk_t get_pinned_nodes(cb_arena_t* arena, cb_func_t* func) {
+  func_walk_t walk = func_walk_unspecified_order(arena, func);
 
-  for (;;) {
-    bool changed = false;
+  size_t pinned_count = 0;
+  cb_node_t** pinned = arena_array(arena, cb_node_t*, func->next_id);
 
-    foreach_list(cb_block_t, b, cfg_head->next) {// skip start
-      cb_block_t* first = NULL;
+  for (size_t i = 0; i < walk.len; ++i) {
+    cb_node_t* node = walk.nodes[i];
 
-      for (int i = 0; i < b->predecessor_count; ++i) {
-        cb_block_t* p = b->predecessors[i];
+    if (!(node->flags & CB_NODE_FLAG_IS_PINNED)) {
+      continue;
+    }
 
-        if (p->idom) {
-          first = p;
-          break;
-        }
+    pinned[pinned_count++] = node;
+  }
+
+  return (func_walk_t) {
+    .len = pinned_count,
+    .nodes = pinned
+  };
+}
+
+static cb_block_t** early_sched(arena_t* arena, cb_block_t** initial_map, func_walk_t pinned, cb_block_t* root, cb_func_t* func) {
+  scratch_t scratch = scratch_get(1, &arena);
+
+  vec_t(sched_item_t) stack = NULL;
+
+  cb_block_t** map = arena_array(arena, cb_block_t*, func->next_id);
+
+  for (int i = 0; i < pinned.len; ++i) {
+    cb_node_t* node = pinned.nodes[i];
+
+    map[node->id] = initial_map[node->id];
+
+    for (int j = 0; j < node->num_ins; ++j) {
+      if (!node->ins[j]) {
+        continue;
       }
 
-      assert(first != NULL);
-      cb_block_t* new_idom = first;;
+      vec_put(stack, sched_item(false, node->ins[j]));
+    }
+  }
 
-      for (int i = 0; i < b->predecessor_count; ++i) {
-        cb_block_t* p = b->predecessors[i];
-        if (p == first) {
+  while (vec_len(stack)) {
+    sched_item_t item = vec_pop(stack);
+    cb_node_t* node = item.node;
+
+    if (!item.processed) {
+      if (map[node->id]) {
+        continue;
+      }
+
+      map[node->id] = root; // all nodes start at the root
+
+      vec_put(stack, sched_item(true, node));
+
+      for (int i = 0; i < node->num_ins; ++i) {
+        if (!node->ins[i]) {
           continue;
         }
 
-        if (p->idom) {
-          new_idom = intersect(p, new_idom);
+        vec_put(stack, sched_item(false, node->ins[i]));
+      }
+    }
+    else {
+      for (int i = 0; i < node->num_ins; ++i) {
+        cb_node_t* x = node->ins[i];
+
+        if (!x) {
+          continue;
+        }
+
+        cb_block_t** bn = map + node->id;
+        cb_block_t** bx = map + x->id;
+
+        if ((*bn)->dom_depth < (*bn)->dom_depth) { // node must be dominated by its inputs
+          (*bn) = (*bx); // move down the dominator tree
         }
       }
-
-      if (b->idom != new_idom) {
-        b->idom = new_idom;
-        changed = true;
-      }
-    }
-
-    if (!changed) {
-      break;
     }
   }
 
-  cfg_head->idom = NULL;
+  vec_free(stack);
+  scratch_release(&scratch);
 
-  foreach_list (cb_block_t, b, cfg_head) {
-    if (b->idom) {
-      b->idom->dom_children_count++;
-    }
+  return map;
+}
+
+void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
+  scratch_t scratch = scratch_get(1, &arena);
+
+  cb_block_t** initial_map = arena_array(scratch.arena, cb_block_t*, func->next_id);
+  cb_block_t* cfg_head = build_cfg(arena, initial_map, func);
+
+  func_walk_t pinned = get_pinned_nodes(scratch.arena, func);
+  cb_block_t** early = early_sched(scratch.arena, initial_map, pinned, cfg_head, func);
+
+  func_walk_t walk = func_walk_post_order_ins(scratch.arena, func);
+
+  int num_blocks = 0;
+  foreach_list(cb_block_t, b, cfg_head) {
+    num_blocks++;
   }
 
-  foreach_list (cb_block_t, b, cfg_head) {
-    b->dom_children = arena_array(arena, cb_block_t*, b->dom_children_count);
-    b->dom_children_count = 0;
-  }
+  vec_t(cb_node_t*)* shit = arena_array(scratch.arena, vec_t(cb_node_t*), num_blocks);
 
-  foreach_list (cb_block_t, b, cfg_head) {
-    cb_block_t* idom = b->idom;
-
-    if (idom) {
-      idom->dom_children[idom->dom_children_count++] = b;
-    }
+  for (size_t i = 0; i < walk.len; ++i) {
+    cb_node_t* node = walk.nodes[i];
+    cb_block_t* b = early[node->id];
+    assert(b);
+    vec_put(shit[b->id], node);
   }
 
   foreach_list (cb_block_t, b, cfg_head) {
     printf("bb_%d:\n", b->id);
 
-    printf("  idom:\n");
-    if (b->idom) {
-      printf("    bb_%d\n", b->idom->id);
-    }
-
-    printf("  dom_children:\n");
-    for (int i = 0; i < b->dom_children_count; ++i) {
-      printf("    bb_%d\n", b->dom_children[i]->id);
+    for (size_t i = 0; i < vec_len(shit[b->id]); ++i) {
+      cb_node_t* node = shit[b->id][i];
+      printf("  _%d = %s\n", node->id, node_kind_label[node->kind]);
     }
   }
 
   printf("\n");
-
-  vec_free(stack);
 
   scratch_release(&scratch);
 }

@@ -17,7 +17,7 @@ cb_func_t* cb_new_func(cb_arena_t* arena) {
 }
 
 static void init_ins(cb_func_t* func, cb_node_t* node, int num_ins) {
-  assert(node->num_ins == 0 && "ins already initialized");
+  assert(node->num_ins == 0 && "ins alre | CB_NODE_FLAG_IS_PINNEDady initialized");
   node->num_ins = num_ins;
   node->ins = arena_array(func->arena, cb_node_t*, num_ins);
 }
@@ -70,7 +70,7 @@ static cb_node_t* new_proj(cb_func_t* func, cb_node_kind_t kind, cb_node_t* inpu
 }
 
 cb_node_start_result_t cb_node_start(cb_func_t* func) {
-  cb_node_t* start = new_node(func, CB_NODE_START, 0, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK);
+  cb_node_t* start = new_node(func, CB_NODE_START, 0, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK | CB_NODE_FLAG_IS_PINNED);
 
   assert(func->start == NULL);
   func->start = start;
@@ -82,7 +82,7 @@ cb_node_start_result_t cb_node_start(cb_func_t* func) {
 }
 
 cb_node_t* cb_node_end(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* value) {
-  cb_node_t* end = new_node(func, CB_NODE_END, NUM_END_INS, 0, CB_NODE_FLAG_IS_CFG);
+  cb_node_t* end = new_node(func, CB_NODE_END, NUM_END_INS, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_IS_PINNED);
 
   set_input(func, end, ctrl, END_CTRL);
   set_input(func, end, mem, END_MEM);
@@ -95,11 +95,11 @@ cb_node_t* cb_node_end(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node
 }
 
 cb_node_t* cb_node_region(cb_func_t* func) {
-  return new_node(func, CB_NODE_REGION, 0, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK);
+  return new_node(func, CB_NODE_REGION, 0, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK | CB_NODE_FLAG_IS_PINNED);
 }
 
 cb_node_t* cb_node_phi(cb_func_t* func) {
-  return new_node(func, CB_NODE_PHI, 0, 0, CB_NODE_FLAG_NONE);
+  return new_node(func, CB_NODE_PHI, 0, 0, CB_NODE_FLAG_IS_PINNED);
 }
 
 cb_node_t* cb_node_null(cb_func_t* func) {
@@ -111,12 +111,12 @@ cb_node_t* cb_node_alloca(cb_func_t* func) {
 }
 
 cb_node_branch_result_t cb_node_branch(cb_func_t* func, cb_node_t* ctrl, cb_node_t* predicate) {
-  cb_node_t* branch = new_node(func, CB_NODE_BRANCH, NUM_BRANCH_INS, 0, CB_NODE_FLAG_IS_CFG);
+  cb_node_t* branch = new_node(func, CB_NODE_BRANCH, NUM_BRANCH_INS, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_IS_PINNED);
   set_input(func, branch, ctrl, BRANCH_CTRL);
   set_input(func, branch, predicate, BRANCH_PREDICATE);
 
-  cb_node_t* branch_false = new_proj(func, CB_NODE_BRANCH_FALSE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK);
-  cb_node_t* branch_true = new_proj(func, CB_NODE_BRANCH_TRUE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK);
+  cb_node_t* branch_false = new_proj(func, CB_NODE_BRANCH_FALSE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK | CB_NODE_FLAG_IS_PINNED);
+  cb_node_t* branch_true = new_proj(func, CB_NODE_BRANCH_TRUE, branch, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK | CB_NODE_FLAG_IS_PINNED);
   
   return (cb_node_branch_result_t) {
     .branch_true = branch_true,
@@ -139,7 +139,7 @@ cb_node_t* cb_node_load(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_nod
 }
 
 cb_node_t* cb_node_store(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address, cb_node_t* value) {
-  cb_node_t* node = new_node(func, CB_NODE_STORE, NUM_STORE_INS, 0, CB_NODE_FLAG_NONE);
+  cb_node_t* node = new_node(func, CB_NODE_STORE, NUM_STORE_INS, 0, CB_NODE_FLAG_IS_PINNED);
   set_input(func, node, ctrl, STORE_CTRL);
   set_input(func, node, mem, STORE_MEM);
   set_input(func, node, address, STORE_ADDR);
