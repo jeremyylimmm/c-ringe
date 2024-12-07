@@ -326,6 +326,94 @@ static cb_block_t** early_sched(arena_t* arena, cb_block_t** initial_map, func_w
   return map;
 }
 
+static cb_block_t* find_lca(cb_block_t* a, cb_block_t* b) {
+  if (a == NULL) {
+    return b;
+  }
+
+  while (a->dom_depth > b->dom_depth) {
+    a = a->idom;
+  }
+
+  while (b->dom_depth > a->dom_depth) {
+    b = b->idom;
+  }
+
+  while (a != b) {
+    a = a->idom;
+    b = b->idom;
+  }
+
+  return a;
+}
+
+static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t pinned, cb_func_t* func) {
+  scratch_t scratch = scratch_get(1, &arena);
+
+  vec_t(sched_item_t) stack = NULL;
+  uint64_t* visited = bitset_alloc(scratch.arena, func->next_id);
+
+  cb_block_t** map = arena_array(arena, cb_block_t*, func->next_id);
+
+  for (int i = 0; i < pinned.len; ++i) {
+    cb_node_t* node = pinned.nodes[i];
+
+    bitset_set(visited, node->id);
+    map[node->id] = early[node->id];
+
+    foreach_list (cb_use_t, use, node->uses) {
+      vec_put(stack, sched_item(false, use->node));
+    }
+  }
+
+  while (vec_len(stack)) {
+    sched_item_t item = vec_pop(stack);
+    cb_node_t* node = item.node;
+
+    if (!item.processed) {
+      if (bitset_get(visited, node->id)) {
+        continue;
+      }
+
+      bitset_set(visited, node->id);
+
+      vec_put(stack, sched_item(true, node));
+
+      foreach_list (cb_use_t, use, node->uses) {
+        vec_put(stack, sched_item(false, use->node));
+      }
+    }
+    else {
+      cb_block_t* lca = NULL;
+
+      foreach_list (cb_use_t, y, node->uses) {
+        cb_block_t* use;
+
+        if (y->node->kind == CB_NODE_PHI) {
+          // for a phi, the use actually occurs in the previous block
+          cb_node_t* region = y->node->ins[0];
+          cb_node_t* ctrl_in = region->ins[y->index-1];
+          use = map[ctrl_in->id];
+        }
+        else {
+          use = map[y->node->id];
+        }
+
+        assert(use);
+
+        lca = find_lca(lca, use);
+      }
+
+      map[node->id] = lca;
+    }
+  }
+
+  vec_free(stack);
+  scratch_release(&scratch);
+
+  return map;
+}
+
 void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
   scratch_t scratch = scratch_get(1, &arena);
 
@@ -334,6 +422,7 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
 
   func_walk_t pinned = get_pinned_nodes(scratch.arena, func);
   cb_block_t** early = early_sched(scratch.arena, initial_map, pinned, cfg_head, func);
+  cb_block_t** late = late_sched(scratch.arena, early, pinned, func);
 
   func_walk_t walk = func_walk_post_order_ins(scratch.arena, func);
 
@@ -346,7 +435,7 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
 
   for (size_t i = 0; i < walk.len; ++i) {
     cb_node_t* node = walk.nodes[i];
-    cb_block_t* b = early[node->id];
+    cb_block_t* b = late[node->id];
     assert(b);
     vec_put(shit[b->id], node);
   }
