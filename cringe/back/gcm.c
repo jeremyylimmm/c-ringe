@@ -313,7 +313,7 @@ static cb_block_t** early_sched(arena_t* arena, cb_block_t** initial_map, func_w
         cb_block_t** bn = map + node->id;
         cb_block_t** bx = map + x->id;
 
-        if ((*bn)->dom_depth < (*bn)->dom_depth) { // node must be dominated by its inputs
+        if ((*bn)->dom_depth < (*bx)->dom_depth) { // node must be dominated by its inputs
           (*bn) = (*bx); // move down the dominator tree
         }
       }
@@ -356,7 +356,23 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
 
     for (size_t i = 0; i < vec_len(shit[b->id]); ++i) {
       cb_node_t* node = shit[b->id][i];
-      printf("  _%d = %s\n", node->id, node_kind_label[node->kind]);
+      printf("  _%d = %s ", node->id, node_kind_label[node->kind]);
+
+      for (size_t j = 0; j < node->num_ins; ++j) {
+        if (j > 0) {
+          printf(", ");
+        }
+
+        cb_node_t* x = node->ins[j];
+        if (!x) {
+          printf("null");
+        }
+        else {
+          printf("_%d", x->id);
+        }
+      }
+     
+      printf("\n");
     }
   }
 
