@@ -472,7 +472,24 @@ static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t p
         lca = find_lca(lca, use);
       }
 
-      map[node->id] = lca;
+      // between the early schedule and the lca, find the shallowest loop depth
+
+      assert(lca);
+      cb_block_t* best = lca;
+
+      for(;;) {
+        if (lca->loop_nesting < best->loop_nesting) {
+          best = lca;
+        }
+
+        if (lca == early[node->id]) {
+          break;
+        }
+
+        lca = lca->idom;
+      }
+
+      map[node->id] = best;
     }
   }
 
@@ -510,9 +527,6 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
 
   foreach_list (cb_block_t, b, cfg_head) {
     printf("bb_%d:\n", b->id);
-
-    printf("  loop_nesting:\n");
-    printf("    %d\n", b->loop_nesting);
 
     for (size_t i = 0; i < vec_len(shit[b->id]); ++i) {
       cb_node_t* node = shit[b->id][i];

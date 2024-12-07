@@ -145,14 +145,59 @@ static cb_node_t* idealize_region(cb_opt_context_t* opt, cb_node_t* node) {
   return node->ins[0];
 }
 
+static bool recent_memory_effects_all_one_address(cb_opt_context_t* opt, cb_node_t* load) {
+  scratch_t scratch = scratch_get(0, NULL);
+  bool result = false;
+
+  vec_clear(opt->stack);
+  vec_put(opt->stack, stack_item(false, load->ins[LOAD_MEM]));
+
+  cb_node_t* address = load->ins[LOAD_ADDR];
+  uint64_t* visited = bitset_alloc(scratch.arena, opt->func->next_id);
+
+  while (vec_len(opt->stack)) {
+    cb_node_t* node = vec_pop(opt->stack).node;
+
+    if (bitset_get(visited, node->id)) {
+      continue;
+    }
+
+    bitset_set(visited, node->id);
+
+    switch (node->kind) {
+      default:
+        goto end;
+
+      case CB_NODE_PHI: {
+        for (int i = 1; i < node->num_ins; ++i) {
+          vec_put(opt->stack, stack_item(false, node->ins[i]));
+        }
+      } break;
+
+      case CB_NODE_STORE: {
+        if (node->ins[STORE_ADDR] != address) {
+          goto end;
+        }
+      } break;
+    }
+  }
+
+  result = true;
+
+  end:
+  scratch_release(&scratch);
+  return result;
+}
+
 static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
   // look at the most recent memory effects this load depends on
   // if they all happen to the same address, we can eliminate the node and use the values directly
 
-  scratch_t scratch = scratch_get(0, NULL);
-  cb_node_t* result = load;
+  if (!recent_memory_effects_all_one_address(opt, load)) {
+    return load;
+  }
 
-  cb_node_t* address = load->ins[LOAD_ADDR];
+  scratch_t scratch = scratch_get(0, NULL);
 
   vec_clear(opt->stack);
   cb_node_t* first = load->ins[LOAD_MEM];
@@ -171,7 +216,8 @@ static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
 
     switch (node->kind) {
       default:
-        goto end; // hit something we can't inspect the value of
+        assert(false);
+        break;
 
       case CB_NODE_PHI: {
 
@@ -201,19 +247,13 @@ static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
       } break; 
 
       case CB_NODE_STORE: {
-        if (node->ins[STORE_ADDR] != address) {
-          goto end;
-        }
-
         map[node->id] = node->ins[STORE_VALUE];
       } break;
     }
   }
 
-  result = map[first->id];
-  assert(result);
+  cb_node_t* result = map[first->id];
 
-  end:
   scratch_release(&scratch);
   return result;
 }

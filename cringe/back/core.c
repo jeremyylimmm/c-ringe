@@ -217,16 +217,20 @@ void cb_finalize_func(cb_func_t* func) {
   assert(func->start);
   assert(func->end);
 
-  func_walk_t walk = func_walk_unspecified_order(scratch.arena, func);
+  int stack_count = 0;
+  cb_node_t** stack = arena_array(scratch.arena, cb_node_t*, func->next_id);
   uint64_t* useful = bitset_alloc(scratch.arena, func->next_id);
 
-  for (size_t i = 0; i < walk.len; ++i) {
-    cb_node_t* node = walk.nodes[i];
-    bitset_set(useful, node->id);
+  stack[stack_count++] = func->end;
+  bitset_set(useful, func->end->id);
 
-    if (node->flags & CB_NODE_FLAG_IS_CFG) {
-      assert(terminates(node));
-    }
+  int walk_count = 0;
+  cb_node_t** walk = arena_array(scratch.arena, cb_node_t*, func->next_id);
+
+  while (stack_count) {
+    cb_node_t* node = stack[--stack_count];
+
+    walk[walk_count++] = node;
 
     switch (node->kind) {
       case CB_NODE_REGION: {
@@ -237,10 +241,27 @@ void cb_finalize_func(cb_func_t* func) {
         assert(node->num_ins > 1);
       } break;
     }
+
+    for(int i = 0; i < node->num_ins; ++i) {
+      cb_node_t* in = node->ins[i];
+
+      if (!in) {
+        continue;
+      }
+
+      if (bitset_get(useful, in->id)) {
+        continue;
+      }
+
+      assert(stack_count < func->next_id);
+      stack[stack_count++] = in;
+
+      bitset_set(useful, in->id);
+    }
   }
 
-  for (size_t i = 0; i < walk.len; ++i) {
-    cb_node_t* node = walk.nodes[i];
+  for (size_t i = 0; i < walk_count; ++i) {
+    cb_node_t* node = walk[i];
 
     for(cb_use_t** puse = &node->uses; *puse;) {
       cb_use_t* use = *puse;
@@ -428,6 +449,19 @@ func_walk_t func_walk_unspecified_order(arena_t* arena, cb_func_t* func) {
       if (!in) {
         continue;
       }
+
+      if (bitset_get(visited, in->id)) {
+        continue;
+      }
+
+      assert(stack_count < func->next_id);
+      stack[stack_count++] = in;
+
+      bitset_set(visited, in->id);
+    }
+
+    foreach_list (cb_use_t, u, node->uses) {
+      cb_node_t* in = u->node;
 
       if (bitset_get(visited, in->id)) {
         continue;
