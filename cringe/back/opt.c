@@ -226,7 +226,8 @@ static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
             continue;
           }
 
-          map[node->id] = cb_node_phi(opt->func);
+          cb_node_t* new_phi = map[node->id] = cb_node_phi(opt->func);
+          worklist_add(opt, new_phi);
 
           vec_put(opt->stack, stack_item(true, node));
 

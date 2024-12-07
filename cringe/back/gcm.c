@@ -499,7 +499,7 @@ static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t p
   return map;
 }
 
-void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
+cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
   scratch_t scratch = scratch_get(1, &arena);
 
   cb_block_t** initial_map = arena_array(scratch.arena, cb_block_t*, func->next_id);
@@ -509,52 +509,74 @@ void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
   cb_block_t** early = early_sched(scratch.arena, initial_map, pinned, cfg_head, func);
   cb_block_t** late = late_sched(scratch.arena, early, pinned, func);
 
-  func_walk_t walk = func_walk_post_order_ins(scratch.arena, func);
+  return (cb_gcm_result_t) {
+    .cfg = cfg_head,
+    .map = late
+  };
+}
+
+void cb_dump_func(FILE* stream, cb_func_t* func) {
+  scratch_t scratch = scratch_get(0, NULL);
+
+  cb_gcm_result_t gcm = cb_run_global_code_motion(scratch.arena, func);
 
   int num_blocks = 0;
-  foreach_list(cb_block_t, b, cfg_head) {
+  foreach_list(cb_block_t, b, gcm.cfg) {
     num_blocks++;
   }
 
-  vec_t(cb_node_t*)* shit = arena_array(scratch.arena, vec_t(cb_node_t*), num_blocks);
+  vec_t(cb_node_t*)* code = arena_array(scratch.arena, vec_t(cb_node_t*), num_blocks);
+
+  func_walk_t walk = func_walk_post_order_ins(scratch.arena, func);
 
   for (size_t i = 0; i < walk.len; ++i) {
     cb_node_t* node = walk.nodes[i];
-    cb_block_t* b = late[node->id];
+    cb_block_t* b = gcm.map[node->id];
     assert(b);
-    vec_put(shit[b->id], node);
+    vec_put(code[b->id], node);
   }
 
-  foreach_list (cb_block_t, b, cfg_head) {
-    printf("bb_%d:\n", b->id);
+  foreach_list (cb_block_t, b, gcm.cfg) {
+    fprintf(stream, "bb_%d:\n", b->id);
 
-    for (size_t i = 0; i < vec_len(shit[b->id]); ++i) {
-      cb_node_t* node = shit[b->id][i];
-      printf("  _%d = %s ", node->id, node_kind_label[node->kind]);
+    for (size_t i = 0; i < vec_len(code[b->id]); ++i) {
+      cb_node_t* node = code[b->id][i];
+      fprintf(stream, "  _%d = %s ", node->id, node_kind_label[node->kind]);
 
-      for (size_t j = 0; j < node->num_ins; ++j) {
-        if (j > 0) {
-          printf(", ");
-        }
+      if (!(node->flags & CB_NODE_FLAG_IS_LEAF)) {
+        for (size_t j = 0; j < node->num_ins; ++j) {
+          if (j > 0) {
+            fprintf(stream, ", ");
+          }
 
-        cb_node_t* x = node->ins[j];
-        if (!x) {
-          printf("null");
-        }
-        else {
-          printf("_%d", x->id);
+          cb_node_t* x = node->ins[j];
+          if (!x) {
+            fprintf(stream, "null");
+          }
+          else {
+            fprintf(stream, "_%d", x->id);
+          }
         }
       }
+
+      switch (node->kind) {
+        case CB_NODE_CONSTANT:
+          fprintf(stream, "%llu", DATA(node, constant_data_t)->value);
+          break;
+      }
      
-      printf("\n");
+      fprintf(stream, "\n");
     }
 
     if (b->successor_count == 1) {
-      printf("  goto bb_%d\n", b->successors[0]->id);
+      fprintf(stream, "  goto bb_%d\n", b->successors[0]->id);
     }
   }
 
-  printf("\n");
+  fprintf(stream, "\n");
 
+  for (int i = 0; i < num_blocks; ++i) {
+    vec_free(code[i]);
+  }
   scratch_release(&scratch);
 }

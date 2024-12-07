@@ -88,6 +88,11 @@ struct cb_block_t {
   int loop_nesting;
 };
 
+typedef struct {
+  cb_block_t* cfg;
+  cb_block_t** map;
+} cb_gcm_result_t;
+
 cb_arena_t* cb_new_arena();
 void cb_free_arena(cb_arena_t* arena);
 
@@ -127,4 +132,5 @@ void cb_free_opt_context(cb_opt_context_t* opt);
 
 void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func);
 
-void cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func);
+cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func);
+void cb_dump_func(FILE* stream, cb_func_t* func);
