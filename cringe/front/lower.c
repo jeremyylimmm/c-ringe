@@ -75,11 +75,11 @@ static cb_node_t* lower_DIV(lower_context_t* ctx, sem_inst_t* inst) {
 }
 
 static cb_node_t* lower_LOAD(lower_context_t* ctx, sem_inst_t* inst) {
-  return cb_node_load(ctx->func, ctx->ctrl, ctx->mem, IN(0));
+  return cb_node_load(ctx->func, ctx->mem, IN(0));
 }
 
 static cb_node_t* lower_STORE(lower_context_t* ctx, sem_inst_t* inst) {
-  return ctx->mem = cb_node_store(ctx->func, ctx->ctrl, ctx->mem, IN(0), IN(1));
+  return ctx->mem = cb_node_store(ctx->func, ctx->mem, IN(0), IN(1));
 }
 
 static cb_node_t* lower_RETURN(lower_context_t* ctx, sem_inst_t* inst) {

@@ -415,6 +415,29 @@ static cb_block_t* find_lca(cb_block_t* a, cb_block_t* b) {
   return a;
 }
 
+#if 0
+static cb_block_t* find_anti_dep(cb_block_t* lca, cb_node_t* load, cb_node_t* early, cb_node_t** late) {
+  assert(load->kind == CB_NODE_LOAD);
+
+  foreach_list (cb_use_t, use, load->ins[LOAD_MEM]->uses) { 
+    static_assert(NUM_CB_NODE_KINDS == 19, "handle anti dep");
+    switch (use->node->kind) {
+      default:
+        assert(false);
+        break;
+      case CB_NODE_STORE:
+        break;
+      case CB_NODE_PHI:
+        break;
+      case CB_NODE_LOAD:
+        break;
+      case CB_NODE_END:
+        break;
+    }
+  }
+}
+#endif
+
 static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t pinned, cb_func_t* func) {
   scratch_t scratch = scratch_get(1, &arena);
 

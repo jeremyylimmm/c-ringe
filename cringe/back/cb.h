@@ -112,8 +112,8 @@ cb_node_branch_result_t cb_node_branch(cb_func_t* func, cb_node_t* ctrl, cb_node
 
 cb_node_t* cb_node_constant(cb_func_t* func, uint64_t value);
 
-cb_node_t* cb_node_load(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address);
-cb_node_t* cb_node_store(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address, cb_node_t* value);
+cb_node_t* cb_node_load(cb_func_t* func, cb_node_t* mem, cb_node_t* address);
+cb_node_t* cb_node_store(cb_func_t* func, cb_node_t* mem, cb_node_t* address, cb_node_t* value);
 
 cb_node_t* cb_node_add (cb_func_t* func, cb_node_t* lhs, cb_node_t* rhs);
 cb_node_t* cb_node_sub (cb_func_t* func, cb_node_t* lhs, cb_node_t* rhs);
