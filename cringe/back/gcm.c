@@ -415,28 +415,48 @@ static cb_block_t* find_lca(cb_block_t* a, cb_block_t* b) {
   return a;
 }
 
-#if 0
-static cb_block_t* find_anti_dep(cb_block_t* lca, cb_node_t* load, cb_node_t* early, cb_node_t** late) {
+static cb_block_t* get_use_block(cb_block_t** map, cb_use_t* use) {
+  if (use->node->kind == CB_NODE_PHI) {
+    cb_node_t* region = use->node->ins[0];
+    cb_node_t* ctrl = region->ins[use->index-1];
+    return map[ctrl->id];
+  }
+  else {
+    return map[use->node->id];
+  }
+}
+
+static bool memory_writer_affects_load(cb_block_t* lca, cb_node_t* load, cb_block_t** early, cb_block_t* mem_use_block) {
+  for (cb_block_t* b = lca; b != early[load->id]->idom; b = b->idom) {
+    if (b == mem_use_block) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static cb_block_t* anti_dep_raise_lca(cb_block_t* lca, cb_node_t* load, cb_block_t** late, cb_block_t** early) {
   assert(load->kind == CB_NODE_LOAD);
 
   foreach_list (cb_use_t, use, load->ins[LOAD_MEM]->uses) { 
-    static_assert(NUM_CB_NODE_KINDS == 19, "handle anti dep");
-    switch (use->node->kind) {
-      default:
-        assert(false);
-        break;
-      case CB_NODE_STORE:
-        break;
-      case CB_NODE_PHI:
-        break;
-      case CB_NODE_LOAD:
-        break;
-      case CB_NODE_END:
-        break;
+    cb_node_t* mem = use->node;
+
+    if (mem == load || !(mem->flags & CB_NODE_FLAG_WRITES_MEMORY)) {
+      continue;
     }
+
+    cb_block_t* use_block = get_use_block(late, use);
+
+    if (!memory_writer_affects_load(lca, load, early, use_block)) {
+      continue;
+    }
+
+    lca = find_lca(lca, use_block);
   }
+
+  return lca;
 }
-#endif
 
 static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t pinned, cb_func_t* func) {
   scratch_t scratch = scratch_get(1, &arena);
@@ -478,21 +498,11 @@ static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t p
       cb_block_t* lca = NULL;
 
       foreach_list (cb_use_t, y, node->uses) {
-        cb_block_t* use;
+        lca = find_lca(lca, get_use_block(map, y));
+      }
 
-        if (y->node->kind == CB_NODE_PHI) {
-          // for a phi, the use actually occurs in the previous block
-          cb_node_t* region = y->node->ins[0];
-          cb_node_t* ctrl_in = region->ins[y->index-1];
-          use = map[ctrl_in->id];
-        }
-        else {
-          use = map[y->node->id];
-        }
-
-        assert(use);
-
-        lca = find_lca(lca, use);
+      if (node->kind == CB_NODE_LOAD) {
+        lca = anti_dep_raise_lca(lca, node, map, early);
       }
 
       // between the early schedule and the lca, find the shallowest loop depth

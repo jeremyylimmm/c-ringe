@@ -139,7 +139,7 @@ cb_node_t* cb_node_load(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_nod
 }
 
 cb_node_t* cb_node_store(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address, cb_node_t* value) {
-  cb_node_t* node = new_node(func, CB_NODE_STORE, NUM_STORE_INS, 0, CB_NODE_FLAG_NONE);
+  cb_node_t* node = new_node(func, CB_NODE_STORE, NUM_STORE_INS, 0, CB_NODE_FLAG_WRITES_MEMORY | CB_NODE_FLAG_IS_PINNED);
   set_input(func, node, ctrl, STORE_CTRL);
   set_input(func, node, mem, STORE_MEM);
   set_input(func, node, address, STORE_ADDR);
@@ -191,6 +191,9 @@ void cb_set_phi_ins(cb_func_t* func, cb_node_t* phi, cb_node_t* region, int num_
   set_input(func, phi, region, 0);
 
   for (int i = 0; i < num_ins; ++i) {
+    if (ins[i]->flags & CB_NODE_FLAG_WRITES_MEMORY) {
+      phi->flags |= CB_NODE_FLAG_WRITES_MEMORY;  
+    }
     set_input(func, phi, ins[i], i + 1);
   }
 }
