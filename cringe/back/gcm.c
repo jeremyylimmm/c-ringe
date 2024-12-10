@@ -328,12 +328,10 @@ static func_walk_t get_pinned_nodes(cb_arena_t* arena, cb_func_t* func) {
   };
 }
 
-static cb_block_t** early_sched(arena_t* arena, cb_block_t** initial_map, func_walk_t pinned, cb_block_t* root, cb_func_t* func) {
-  scratch_t scratch = scratch_get(1, &arena);
+static void early_sched(cb_block_t** map, cb_block_t** initial_map, func_walk_t pinned, cb_block_t* root) {
+  scratch_t scratch = scratch_get(0, NULL);
 
   vec_t(sched_item_t) stack = NULL;
-
-  cb_block_t** map = arena_array(arena, cb_block_t*, func->next_id);
 
   for (int i = 0; i < pinned.len; ++i) {
     cb_node_t* node = pinned.nodes[i];
@@ -390,8 +388,6 @@ static cb_block_t** early_sched(arena_t* arena, cb_block_t** initial_map, func_w
 
   vec_free(stack);
   scratch_release(&scratch);
-
-  return map;
 }
 
 static cb_block_t* find_lca(cb_block_t* a, cb_block_t* b) {
@@ -436,7 +432,7 @@ static bool memory_writer_affects_load(cb_block_t* lca, cb_node_t* load, cb_bloc
   return false;
 }
 
-static cb_block_t* anti_dep_raise_lca(cb_block_t* lca, cb_node_t* load, cb_block_t** late, cb_block_t** early) {
+static cb_block_t* anti_dep_raise_lca(arena_t* arena, cb_anti_dep_t** anti_deps, cb_block_t* lca, cb_node_t* load, cb_block_t** late, cb_block_t** early) {
   assert(load->kind == CB_NODE_LOAD);
 
   foreach_list (cb_use_t, use, load->ins[LOAD_MEM]->uses) { 
@@ -452,19 +448,22 @@ static cb_block_t* anti_dep_raise_lca(cb_block_t* lca, cb_node_t* load, cb_block
       continue;
     }
 
+    cb_anti_dep_t* anti = arena_type(arena, cb_anti_dep_t);
+    anti->node = load;
+    anti->next = anti_deps[mem->id];
+    anti_deps[mem->id] = anti;
+
     lca = find_lca(lca, use_block);
   }
 
   return lca;
 }
 
-static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t pinned, cb_func_t* func) {
+static void late_sched(cb_arena_t* arena, cb_block_t** map, cb_anti_dep_t** anti_deps, cb_block_t** early, func_walk_t pinned, cb_func_t* func) {
   scratch_t scratch = scratch_get(1, &arena);
 
   vec_t(sched_item_t) stack = NULL;
   uint64_t* visited = bitset_alloc(scratch.arena, func->next_id);
-
-  cb_block_t** map = arena_array(arena, cb_block_t*, func->next_id);
 
   for (int i = 0; i < pinned.len; ++i) {
     cb_node_t* node = pinned.nodes[i];
@@ -502,7 +501,7 @@ static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t p
       }
 
       if (node->kind == CB_NODE_LOAD) {
-        lca = anti_dep_raise_lca(lca, node, map, early);
+        lca = anti_dep_raise_lca(arena, anti_deps, lca, node, map, early);
       }
 
       // between the early schedule and the lca, find the shallowest loop depth
@@ -528,8 +527,6 @@ static cb_block_t** late_sched(arena_t* arena, cb_block_t** early, func_walk_t p
 
   vec_free(stack);
   scratch_release(&scratch);
-
-  return map;
 }
 
 cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
@@ -538,14 +535,48 @@ cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
   cb_block_t** initial_map = arena_array(scratch.arena, cb_block_t*, func->next_id);
   cb_block_t* cfg_head = build_cfg(arena, initial_map, func);
 
+  cb_anti_dep_t** anti_deps = arena_array(arena, cb_anti_dep_t*, func->next_id);
+
   func_walk_t pinned = get_pinned_nodes(scratch.arena, func);
-  cb_block_t** early = early_sched(scratch.arena, initial_map, pinned, cfg_head, func);
-  cb_block_t** late = late_sched(scratch.arena, early, pinned, func);
+
+  cb_block_t** early = arena_array(arena, cb_block_t*, func->next_id);
+  early_sched(early, initial_map, pinned, cfg_head);
+
+  cb_block_t** late = arena_array(arena, cb_block_t*, func->next_id);
+  late_sched(arena, late, anti_deps, early, pinned, func);
 
   return (cb_gcm_result_t) {
     .cfg = cfg_head,
-    .map = late
+    .map = late,
+    .anti_deps = anti_deps
   };
+}
+
+static void put_code(func_walk_t* walk, cb_gcm_result_t* gcm, bool(*cond_func)(cb_node_t*), vec_t(cb_node_t*)* code) {
+  for (size_t i = 0; i < walk->len; ++i) {
+    cb_node_t* node = walk->nodes[i];
+    cb_block_t* b = gcm->map[node->id];
+
+    if (cond_func(node)) {
+      vec_put(code[b->id], node);
+    }
+  }
+}
+
+static bool block_starter(cb_node_t* node) {
+  return node->flags & CB_NODE_FLAG_STARTS_BASIC_BLOCK;
+}
+
+static bool block_phi(cb_node_t* node) {
+  return node->kind == CB_NODE_PHI;
+}
+
+static bool block_branch(cb_node_t* node) {
+  return node->kind == CB_NODE_BRANCH;
+}
+
+static bool block_everything_else(cb_node_t* node) {
+  return !(block_starter(node) || block_phi(node) || block_branch(node));
 }
 
 void cb_dump_func(FILE* stream, cb_func_t* func) {
@@ -560,14 +591,12 @@ void cb_dump_func(FILE* stream, cb_func_t* func) {
 
   vec_t(cb_node_t*)* code = arena_array(scratch.arena, vec_t(cb_node_t*), num_blocks);
 
-  func_walk_t walk = func_walk_post_order_ins(scratch.arena, func);
+  func_walk_t walk = func_walk_post_order_ins(scratch.arena, func, gcm.anti_deps);
 
-  for (size_t i = 0; i < walk.len; ++i) {
-    cb_node_t* node = walk.nodes[i];
-    cb_block_t* b = gcm.map[node->id];
-    assert(b);
-    vec_put(code[b->id], node);
-  }
+  put_code(&walk, &gcm, block_starter, code);
+  put_code(&walk, &gcm, block_phi, code);
+  put_code(&walk, &gcm, block_everything_else, code);
+  put_code(&walk, &gcm, block_branch, code);
 
   foreach_list (cb_block_t, b, gcm.cfg) {
     fprintf(stream, "bb_%d:\n", b->id);

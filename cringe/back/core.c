@@ -384,7 +384,7 @@ static post_order_item_t post_order_item(bool ins_processed, cb_node_t* node) {
   };
 }
 
-func_walk_t func_walk_post_order_ins(arena_t* arena, cb_func_t* func) {
+func_walk_t func_walk_post_order_ins(arena_t* arena, cb_func_t* func, cb_anti_dep_t** anti_deps /*optional*/) {
   scratch_t scratch = scratch_get(1, &arena);
 
   size_t num_nodes = 0;
@@ -411,6 +411,12 @@ func_walk_t func_walk_post_order_ins(arena_t* arena, cb_func_t* func) {
       for (int i = 0; i < node->num_ins; ++i) {
         if (node->ins[i]) {
           vec_put(stack, post_order_item(false, node->ins[i]));
+        }
+      }
+
+      if (anti_deps) {
+        foreach_list (cb_anti_dep_t, ad, anti_deps[node->id]) {
+          vec_put(stack, post_order_item(false, ad->node));
         }
       }
     }

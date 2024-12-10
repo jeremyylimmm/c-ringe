@@ -48,7 +48,7 @@ typedef struct {
   cb_node_t** nodes;
 } func_walk_t;
 
-func_walk_t func_walk_post_order_ins(arena_t* arena, cb_func_t* func);
+func_walk_t func_walk_post_order_ins(arena_t* arena, cb_func_t* func, cb_anti_dep_t** anti_deps /*optional*/);
 func_walk_t func_walk_unspecified_order(arena_t* arena, cb_func_t* func); // fastest due to no allocations
 
 #define X(name, label, ...) label,
