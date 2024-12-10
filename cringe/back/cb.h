@@ -87,6 +87,9 @@ struct cb_block_t {
   int dom_depth;
 
   int loop_nesting;
+
+  int node_count;
+  cb_node_t** nodes;
 };
 
 typedef struct cb_anti_dep_t cb_anti_dep_t;
@@ -99,6 +102,7 @@ typedef struct {
   cb_block_t* cfg;
   cb_block_t** map;
   cb_anti_dep_t** anti_deps;
+  int block_count;
 } cb_gcm_result_t;
 
 cb_arena_t* cb_new_arena();
@@ -141,5 +145,7 @@ void cb_free_opt_context(cb_opt_context_t* opt);
 void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func);
 
 cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func);
+
 void cb_dump_func(FILE* stream, cb_func_t* func);
 
+void cb_generate_x64(cb_func_t* func);

@@ -206,7 +206,7 @@ static void compute_loop_nesting(int block_count, cb_block_t* cfg_head) {
   scratch_release(&scratch);
 }
 
-static cb_block_t* build_cfg(arena_t* arena, cb_block_t** block_map, cb_func_t* func) {
+static cb_block_t* build_cfg(arena_t* arena, cb_block_t** block_map, cb_func_t* func, int* out_block_count) {
   // first we traverse the implicit control-flow graph within the sea of nodes
   // and build an explicit control flow graph with basic blocks
 
@@ -303,6 +303,11 @@ static cb_block_t* build_cfg(arena_t* arena, cb_block_t** block_map, cb_func_t* 
   
   vec_free(stack);
   scratch_release(&scratch);
+
+  if (out_block_count) {
+    *out_block_count = next_block_id;
+  }
+
   return cfg_head;
 }
 
@@ -529,33 +534,10 @@ static void late_sched(cb_arena_t* arena, cb_block_t** map, cb_anti_dep_t** anti
   scratch_release(&scratch);
 }
 
-cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
-  scratch_t scratch = scratch_get(1, &arena);
-
-  cb_block_t** initial_map = arena_array(scratch.arena, cb_block_t*, func->next_id);
-  cb_block_t* cfg_head = build_cfg(arena, initial_map, func);
-
-  cb_anti_dep_t** anti_deps = arena_array(arena, cb_anti_dep_t*, func->next_id);
-
-  func_walk_t pinned = get_pinned_nodes(scratch.arena, func);
-
-  cb_block_t** early = arena_array(arena, cb_block_t*, func->next_id);
-  early_sched(early, initial_map, pinned, cfg_head);
-
-  cb_block_t** late = arena_array(arena, cb_block_t*, func->next_id);
-  late_sched(arena, late, anti_deps, early, pinned, func);
-
-  return (cb_gcm_result_t) {
-    .cfg = cfg_head,
-    .map = late,
-    .anti_deps = anti_deps
-  };
-}
-
-static void put_code(func_walk_t* walk, cb_gcm_result_t* gcm, bool(*cond_func)(cb_node_t*), vec_t(cb_node_t*)* code) {
+static void put_code(func_walk_t* walk, cb_block_t** map, bool(*cond_func)(cb_node_t*), vec_t(cb_node_t*)* code) {
   for (size_t i = 0; i < walk->len; ++i) {
     cb_node_t* node = walk->nodes[i];
-    cb_block_t* b = gcm->map[node->id];
+    cb_block_t* b = map[node->id];
 
     if (cond_func(node)) {
       vec_put(code[b->id], node);
@@ -579,6 +561,46 @@ static bool block_everything_else(cb_node_t* node) {
   return !(block_starter(node) || block_phi(node) || block_branch(node));
 }
 
+cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func) {
+  scratch_t scratch = scratch_get(1, &arena);
+
+  cb_block_t** initial_map = arena_array(scratch.arena, cb_block_t*, func->next_id);
+
+  int block_count = 0;
+  cb_block_t* cfg_head = build_cfg(arena, initial_map, func, &block_count);
+
+  cb_anti_dep_t** anti_deps = arena_array(arena, cb_anti_dep_t*, func->next_id);
+
+  func_walk_t pinned = get_pinned_nodes(scratch.arena, func);
+
+  cb_block_t** early = arena_array(arena, cb_block_t*, func->next_id);
+  early_sched(early, initial_map, pinned, cfg_head);
+
+  cb_block_t** late = arena_array(arena, cb_block_t*, func->next_id);
+  late_sched(arena, late, anti_deps, early, pinned, func);
+
+  vec_t(cb_node_t*)* code = arena_array(scratch.arena, vec_t(cb_node_t*), block_count);
+
+  func_walk_t walk = func_walk_post_order_ins(scratch.arena, func, anti_deps);
+
+  put_code(&walk, late, block_starter, code);
+  put_code(&walk, late, block_phi, code);
+  put_code(&walk, late, block_everything_else, code);
+  put_code(&walk, late, block_branch, code);
+
+  foreach_list(cb_block_t, b, cfg_head) {
+    b->node_count = (int)vec_len(code[b->id]);
+    b->nodes = vec_bake(arena, code[b->id]);
+  }
+
+  return (cb_gcm_result_t) {
+    .cfg = cfg_head,
+    .map = late,
+    .anti_deps = anti_deps,
+    .block_count = block_count
+  };
+}
+
 void cb_dump_func(FILE* stream, cb_func_t* func) {
   scratch_t scratch = scratch_get(0, NULL);
 
@@ -589,21 +611,18 @@ void cb_dump_func(FILE* stream, cb_func_t* func) {
     num_blocks++;
   }
 
-  vec_t(cb_node_t*)* code = arena_array(scratch.arena, vec_t(cb_node_t*), num_blocks);
-
-  func_walk_t walk = func_walk_post_order_ins(scratch.arena, func, gcm.anti_deps);
-
-  put_code(&walk, &gcm, block_starter, code);
-  put_code(&walk, &gcm, block_phi, code);
-  put_code(&walk, &gcm, block_everything_else, code);
-  put_code(&walk, &gcm, block_branch, code);
-
   foreach_list (cb_block_t, b, gcm.cfg) {
     fprintf(stream, "bb_%d:\n", b->id);
 
-    for (size_t i = 0; i < vec_len(code[b->id]); ++i) {
-      cb_node_t* node = code[b->id][i];
-      fprintf(stream, "  _%d = %s ", node->id, node_kind_label[node->kind]);
+    for (size_t i = 0; i < b->node_count; ++i) {
+      cb_node_t* node = b->nodes[i];
+      fprintf(stream, "  _%d = ", node->id);
+
+      if (node->flags & CB_NODE_FLAG_IS_PROJ) {
+        fprintf(stream, "%s.", node_kind_label[node->ins[0]->kind]);
+      }
+
+      fprintf(stream, "%s ", node_kind_label[node->kind]);
 
       if (!(node->flags & CB_NODE_FLAG_IS_LEAF)) {
         for (size_t j = 0; j < node->num_ins; ++j) {
@@ -637,8 +656,5 @@ void cb_dump_func(FILE* stream, cb_func_t* func) {
 
   fprintf(stream, "\n");
 
-  for (int i = 0; i < num_blocks; ++i) {
-    vec_free(code[i]);
-  }
   scratch_release(&scratch);
 }

@@ -78,5 +78,7 @@ int main() {
 
   cb_dump_func(stdout, cb_func);
 
+  cb_generate_x64(cb_func);
+
   return 0;
 }
