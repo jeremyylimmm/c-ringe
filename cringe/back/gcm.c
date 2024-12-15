@@ -438,7 +438,7 @@ static bool memory_writer_affects_load(cb_block_t* lca, cb_node_t* load, cb_bloc
 }
 
 static cb_block_t* anti_dep_raise_lca(arena_t* arena, cb_anti_dep_t** anti_deps, cb_block_t* lca, cb_node_t* load, cb_block_t** late, cb_block_t** early) {
-  assert(load->kind == CB_NODE_LOAD);
+  assert(load->flags & CB_NODE_FLAG_READS_MEMORY);
 
   foreach_list (cb_use_t, use, load->ins[LOAD_MEM]->uses) { 
     cb_node_t* mem = use->node;
@@ -505,7 +505,7 @@ static void late_sched(cb_arena_t* arena, cb_block_t** map, cb_anti_dep_t** anti
         lca = find_lca(lca, get_use_block(map, y));
       }
 
-      if (node->kind == CB_NODE_LOAD) {
+      if (node->kind == CB_NODE_FLAG_READS_MEMORY) {
         lca = anti_dep_raise_lca(arena, anti_deps, lca, node, map, early);
       }
 
