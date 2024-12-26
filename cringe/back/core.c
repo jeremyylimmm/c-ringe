@@ -354,10 +354,6 @@ void cb_graphviz_func(FILE* stream, cb_func_t* func) {
         case CB_NODE_CONSTANT:
           fprintf(stream, "#%llu", DATA(node, constant_data_t)->value);
           break;
-
-        case CB_NODE_X64_MOV32_RI:
-          fprintf(stream, "x64_mov32_ri #%u", *DATA(node, uint32_t));
-          break;
       }
 
       fprintf(stream, "\"];\n");

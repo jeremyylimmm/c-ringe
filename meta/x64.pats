@@ -6,6 +6,14 @@ null() -> kill32()
 add(l, r) -> add32_rr(l, r)
 sub(l, r) -> sub32_rr(l, r)
 mul(l, r) -> mul32_rr(l, r)
+sdiv(l, r) -> idiv32_rr(l, r)
 
 add(l, constant:r()) -> add32_ri(l, "get_const_32(r)")
 add(constant:l(), r) -> add32_ri(r, "get_const_32(l)")
+
+store(c, m, a, v) -> mov32_mr(c, m, a, v)
+store(c, m, a, constant:x()) -> mov32_mi(c, m, a, "get_const_32(x)")
+
+load(c, m, a) -> mov32_rm(c, m, a)
+
+end(c, m, v) -> end32(c, m, v)

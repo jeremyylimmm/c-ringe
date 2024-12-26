@@ -2,8 +2,17 @@ X(X64_ADD32_RR, "x64_add32_rr")
 X(X64_SUB32_RR, "x64_sub32_rr")
 X(X64_MUL32_RR, "x64_mul32_rr")
 
+X(X64_IDIV32_RR, "x64_idiv32_rr")
+
 X(X64_ADD32_RI, "x64_add32_ri")
 
 X(X64_KILL32, "x64_kill32")
 
 X(X64_MOV32_RI, "x64_mov32_ri")
+
+X(X64_MOV32_RM, "x64_mov32_rm")
+
+X(X64_MOV32_MR, "x64_mov32_mr")
+X(X64_MOV32_MI, "x64_mov32_mi")
+
+X(X64_END32, "x64_end32")

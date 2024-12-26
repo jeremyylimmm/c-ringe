@@ -505,7 +505,7 @@ static void late_sched(cb_arena_t* arena, cb_block_t** map, cb_anti_dep_t** anti
         lca = find_lca(lca, get_use_block(map, y));
       }
 
-      if (node->kind == CB_NODE_FLAG_READS_MEMORY) {
+      if (node->flags & CB_NODE_FLAG_READS_MEMORY) {
         lca = anti_dep_raise_lca(arena, anti_deps, lca, node, map, early);
       }
 

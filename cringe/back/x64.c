@@ -60,6 +60,10 @@ static bool should_be_root(cb_node_t* node) {
       return true;
   }
 
+  if (node->flags & CB_NODE_FLAG_IS_CFG) {
+    return true;
+  }
+
   if (node->flags & CB_NODE_FLAG_IS_PROJ) {
     return true;
   }
@@ -116,12 +120,6 @@ SELF_SEL(BRANCH)
 SELF_SEL(BRANCH_TRUE)
 SELF_SEL(BRANCH_FALSE)
 
-SELF_SEL(END)
-
-SELF_SEL(LOAD)
-SELF_SEL(STORE)
-SELF_SEL(SDIV)
-
 static cb_node_t* targ_node_bin(sel_context_t* s, cb_node_kind_t kind, cb_node_t* left, cb_node_t* right) {
   cb_node_t* node = new_node(s->new_func, kind, 2, 0, CB_NODE_FLAG_NONE);
   set_input(s->new_func, node, left, 0);
@@ -141,6 +139,10 @@ static cb_node_t* targ_node_mul32_rr(sel_context_t* s, cb_node_t* left, cb_node_
   return targ_node_bin(s, CB_NODE_X64_MUL32_RR, left, right);
 }
 
+static cb_node_t* targ_node_idiv32_rr(sel_context_t* s, cb_node_t* left, cb_node_t* right) {
+  return targ_node_bin(s, CB_NODE_X64_IDIV32_RR, left, right);
+}
+
 static cb_node_t* targ_node_kill32(sel_context_t* s) {
   return new_leaf(s->new_func, CB_NODE_X64_KILL32, 0, CB_NODE_FLAG_NONE);
 }
@@ -155,6 +157,40 @@ static cb_node_t* targ_node_add32_ri(sel_context_t* s, cb_node_t* left, uint32_t
   cb_node_t* node = new_node(s->new_func, CB_NODE_X64_ADD32_RI, 1, sizeof(right), CB_NODE_FLAG_NONE);
   set_input(s->new_func, node, left, 0);
   *DATA(node, uint32_t) = right;
+  return node;
+}
+
+static cb_node_t* targ_node_mov32_mr(sel_context_t* s, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address, cb_node_t* value) {
+  cb_node_t* node = new_node(s->new_func, CB_NODE_X64_MOV32_MR, 4, 0, CB_NODE_FLAG_IS_PINNED | CB_NODE_FLAG_PRODUCES_MEMORY);
+  set_input(s->new_func, node, ctrl, 0);
+  set_input(s->new_func, node, mem, 1);
+  set_input(s->new_func, node, address, 2);
+  set_input(s->new_func, node, value, 3);
+  return node;
+}
+
+static cb_node_t* targ_node_mov32_mi(sel_context_t* s, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address, uint32_t value) {
+  cb_node_t* node = new_node(s->new_func, CB_NODE_X64_MOV32_MI, 3, sizeof(value), CB_NODE_FLAG_IS_PINNED | CB_NODE_FLAG_PRODUCES_MEMORY);
+  set_input(s->new_func, node, ctrl, 0);
+  set_input(s->new_func, node, mem, 1);
+  set_input(s->new_func, node, address, 2);
+  *DATA(node, uint32_t) = value;
+  return node;
+}
+
+static cb_node_t* targ_node_mov32_rm(sel_context_t* s, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address) {
+  cb_node_t* node = new_node(s->new_func, CB_NODE_X64_MOV32_RM, 3, 0, CB_NODE_FLAG_READS_MEMORY);
+  set_input(s->new_func, node, ctrl, 0);
+  set_input(s->new_func, node, mem, 1);
+  set_input(s->new_func, node, address, 2);
+  return node;
+}
+
+static cb_node_t* targ_node_end32(sel_context_t* s, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* value) {
+  cb_node_t* node = new_node(s->new_func, CB_NODE_X64_END32, 3, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_IS_PINNED);
+  set_input(s->new_func, node, ctrl, 0);
+  set_input(s->new_func, node, mem, 1);
+  set_input(s->new_func, node, value, 2);
   return node;
 }
 
@@ -230,7 +266,6 @@ cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
     }
   }
 
-  assert(s.map[in_func->end->id]->kind == CB_NODE_END);
   new_func->end = s.map[in_func->end->id];
 
   // go through all roots and patch inputs
