@@ -443,7 +443,7 @@ static cb_block_t* anti_dep_raise_lca(arena_t* arena, cb_anti_dep_t** anti_deps,
   foreach_list (cb_use_t, use, load->ins[LOAD_MEM]->uses) { 
     cb_node_t* mem = use->node;
 
-    if (mem == load || !(mem->flags & CB_NODE_FLAG_WRITES_MEMORY)) {
+    if (mem == load || !(mem->flags & CB_NODE_FLAG_PRODUCES_MEMORY)) {
       continue;
     }
 

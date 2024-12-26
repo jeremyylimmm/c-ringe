@@ -16,30 +16,50 @@ cb_func_t* cb_new_func(cb_arena_t* arena) {
   return func;
 }
 
+static cb_node_t* get_start(cb_func_t* func) {
+  if (!func->start) {
+    new_node(func, CB_NODE_START, 0, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK | CB_NODE_FLAG_IS_PINNED);
+  }
+
+  return func->start;
+}
+
 static void init_ins(cb_func_t* func, cb_node_t* node, int num_ins) {
-  assert(node->num_ins == 0 && "ins alre | CB_NODE_FLAG_IS_PINNEDady initialized");
+  assert(node->num_ins == 0 && "ins already initialized");
   node->num_ins = num_ins;
   node->ins = arena_array(func->arena, cb_node_t*, num_ins);
 }
 
-static cb_node_t* new_node_unchecked(cb_func_t* func, cb_node_kind_t kind, int num_ins, size_t data_size, cb_node_flags_t flags) {
+static cb_node_t* new_node_unchecked(cb_func_t* func, cb_node_kind_t kind, int num_ins, int data_size, cb_node_flags_t flags) {
+  if (kind == CB_NODE_START && func->start) {
+    return func->start;
+  }
+
   cb_node_t* node = arena_push_zeroed(func->arena, sizeof(cb_node_t) + data_size);
   node->flags = flags;
   node->id = func->next_id++;
   node->kind = kind;
+  node->data_size = data_size;
 
   init_ins(func, node, num_ins);
+
+  if (node->kind == CB_NODE_START) {
+    assert(!func->start);
+    func->start = node;
+  }
 
   return node;
 }
 
-static cb_node_t* new_node(cb_func_t* func, cb_node_kind_t kind, int num_ins, size_t data_size, cb_node_flags_t flags) {
+cb_node_t* new_node(cb_func_t* func, cb_node_kind_t kind, int num_ins, int data_size, cb_node_flags_t flags) {
   assert(num_ins > 0 || kind == CB_NODE_START || kind == CB_NODE_PHI || kind == CB_NODE_REGION);
   return new_node_unchecked(func, kind, num_ins, data_size, flags);
 }
 
-static void set_input(cb_func_t* func, cb_node_t* node, cb_node_t* input, int index) {
-  assert(input);
+void set_input(cb_func_t* func, cb_node_t* node, cb_node_t* input, int index) {
+  if (input == NULL) {
+    return;
+  }
 
   assert(index >= 0 && index < node->num_ins);
   assert(node->ins[index] == NULL);
@@ -54,11 +74,10 @@ static void set_input(cb_func_t* func, cb_node_t* node, cb_node_t* input, int in
   input->uses = use;
 }
 
-static cb_node_t* new_leaf(cb_func_t* func, cb_node_kind_t kind, size_t data_size, cb_node_flags_t flags) {
+cb_node_t* new_leaf(cb_func_t* func, cb_node_kind_t kind, int data_size, cb_node_flags_t flags) {
   cb_node_t* node = new_node_unchecked(func, kind, 1, data_size, flags | CB_NODE_FLAG_IS_LEAF);
 
-  assert(func->start);
-  set_input(func, node, func->start, 0);
+  set_input(func, node, get_start(func), 0);
 
   return node;
 }
@@ -70,14 +89,9 @@ static cb_node_t* new_proj(cb_func_t* func, cb_node_kind_t kind, cb_node_t* inpu
 }
 
 cb_node_start_result_t cb_node_start(cb_func_t* func) {
-  cb_node_t* start = new_node(func, CB_NODE_START, 0, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_STARTS_BASIC_BLOCK | CB_NODE_FLAG_IS_PINNED);
-
-  assert(func->start == NULL);
-  func->start = start;
-
   return (cb_node_start_result_t) {
-    .start_ctrl = new_proj(func, CB_NODE_START_CTRL, start, CB_NODE_FLAG_IS_CFG),
-    .start_mem = new_proj(func, CB_NODE_START_MEM, start, CB_NODE_FLAG_NONE)
+    .start_ctrl = new_proj(func, CB_NODE_START_CTRL, get_start(func), CB_NODE_FLAG_IS_CFG),
+    .start_mem = new_proj(func, CB_NODE_START_MEM, get_start(func), CB_NODE_FLAG_PRODUCES_MEMORY)
   };
 }
 
@@ -139,7 +153,7 @@ cb_node_t* cb_node_load(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_nod
 }
 
 cb_node_t* cb_node_store(cb_func_t* func, cb_node_t* ctrl, cb_node_t* mem, cb_node_t* address, cb_node_t* value) {
-  cb_node_t* node = new_node(func, CB_NODE_STORE, NUM_STORE_INS, 0, CB_NODE_FLAG_WRITES_MEMORY | CB_NODE_FLAG_IS_PINNED);
+  cb_node_t* node = new_node(func, CB_NODE_STORE, NUM_STORE_INS, 0, CB_NODE_FLAG_PRODUCES_MEMORY | CB_NODE_FLAG_IS_PINNED);
   set_input(func, node, ctrl, STORE_CTRL);
   set_input(func, node, mem, STORE_MEM);
   set_input(func, node, address, STORE_ADDR);
@@ -177,6 +191,7 @@ void cb_set_region_ins(cb_func_t* func, cb_node_t* region, int num_ins, cb_node_
   init_ins(func, region, num_ins);
 
   for (int i = 0; i < num_ins; ++i) {
+    assert(ins[i]);
     set_input(func, region, ins[i], i);
   }
 }
@@ -191,8 +206,9 @@ void cb_set_phi_ins(cb_func_t* func, cb_node_t* phi, cb_node_t* region, int num_
   set_input(func, phi, region, 0);
 
   for (int i = 0; i < num_ins; ++i) {
-    if (ins[i]->flags & CB_NODE_FLAG_WRITES_MEMORY) {
-      phi->flags |= CB_NODE_FLAG_WRITES_MEMORY;  
+    assert(ins[i]);
+    if (ins[i]->flags & CB_NODE_FLAG_PRODUCES_MEMORY) {
+      phi->flags |= CB_NODE_FLAG_PRODUCES_MEMORY;  
     }
     set_input(func, phi, ins[i], i + 1);
   }
@@ -338,6 +354,10 @@ void cb_graphviz_func(FILE* stream, cb_func_t* func) {
         case CB_NODE_CONSTANT:
           fprintf(stream, "#%llu", DATA(node, constant_data_t)->value);
           break;
+
+        case CB_NODE_X64_MOV32_RI:
+          fprintf(stream, "x64_mov32_ri #%u", *DATA(node, uint32_t));
+          break;
       }
 
       fprintf(stream, "\"];\n");
@@ -372,51 +392,39 @@ void cb_graphviz_func(FILE* stream, cb_func_t* func) {
   scratch_release(&scratch);
 }
 
-typedef struct {
-  bool ins_processed;
-  cb_node_t* node;
-} post_order_item_t;
-
-static post_order_item_t post_order_item(bool ins_processed, cb_node_t* node) {
-  return (post_order_item_t) {
-    .ins_processed = ins_processed,
-    .node = node
-  };
-}
-
 func_walk_t func_walk_post_order_ins(arena_t* arena, cb_func_t* func, cb_anti_dep_t** anti_deps /*optional*/) {
   scratch_t scratch = scratch_get(1, &arena);
 
   size_t num_nodes = 0;
   cb_node_t** nodes = arena_array(arena, cb_node_t*, func->next_id);
 
-  vec_t(post_order_item_t) stack = NULL;
-  vec_put(stack, post_order_item(false, func->end));
+  vec_t(bool_node_t) stack = NULL;
+  vec_put(stack, bool_node(false, func->end));
 
   uint64_t* visited = bitset_alloc(scratch.arena, func->next_id);
 
   while (vec_len(stack)) {
-    post_order_item_t item = vec_pop(stack);
+    bool_node_t item = vec_pop(stack);
     cb_node_t* node = item.node;
 
-    if (!item.ins_processed) {
+    if (!item.processed) {
       if (bitset_get(visited, node->id)) {
         continue;
       }
 
       bitset_set(visited, node->id);
 
-      vec_put(stack, post_order_item(true, node));
+      vec_put(stack, bool_node(true, node));
       
       for (int i = 0; i < node->num_ins; ++i) {
         if (node->ins[i]) {
-          vec_put(stack, post_order_item(false, node->ins[i]));
+          vec_put(stack, bool_node(false, node->ins[i]));
         }
       }
 
       if (anti_deps) {
         foreach_list (cb_anti_dep_t, ad, anti_deps[node->id]) {
-          vec_put(stack, post_order_item(false, ad->node));
+          vec_put(stack, bool_node(false, ad->node));
         }
       }
     }

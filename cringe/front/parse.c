@@ -16,6 +16,7 @@ typedef struct {
     struct { token_t lparen; } _else;
     struct { token_t lparen; } while_body;
     struct { int count; } top_level;
+    struct { token_t lparen; } close_paren_expr;
   } as;
 } state_t;
 
@@ -110,6 +111,13 @@ static state_t state_complete(parse_node_kind_t kind, token_t token, int childre
     .as.complete.kind = kind,
     .as.complete.token = token,
     .as.complete.children_count = children_count,
+  };
+}
+
+static state_t state_close_paren_expr(token_t lparen) {
+  return (state_t) {
+    .kind = STATE_CLOSE_PAREN_EXPR,
+    .as.close_paren_expr.lparen = lparen
   };
 }
 
@@ -236,7 +244,23 @@ static bool handle_PRIMARY(parser_t* p, state_t state) {
       node(p, PARSE_NODE_IDENTIFIER, lex(p), 0);
       return true;
     }
+
+    case '(': {
+      token_t lparen = lex(p);
+      push(p, state_close_paren_expr(lparen));
+      push(p, state_expr());
+      return true;
+    }
   }
+}
+
+static bool handle_CLOSE_PAREN_EXPR(parser_t* p, state_t state) {
+  if (peek(p).kind != ')') {
+    error(p, state.as.close_paren_expr.lparen, "no closing ')'");
+    return false;
+  }
+  lex(p);
+  return true;
 }
 
 static bool handle_BINARY(parser_t* p, state_t state) {

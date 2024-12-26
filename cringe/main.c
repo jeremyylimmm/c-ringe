@@ -78,5 +78,10 @@ int main() {
 
   cb_dump_func(stdout, cb_func);
 
+  cb_func_t* x64_func = cb_select_x64(arena, cb_func);
+  cb_graphviz_func(stdout, x64_func);
+
+  cb_dump_func(stdout, x64_func);
+
   return 0;
 }

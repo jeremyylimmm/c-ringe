@@ -1,7 +1,7 @@
 #include <ctype.h>
 
 #include "front.h"
-#include "dfa.h"
+#include "lex_dfa.h"
 
 static uint8_t dfa(uint8_t state, uint8_t c) {
   return (dfa_table[c] >> state) & 63;

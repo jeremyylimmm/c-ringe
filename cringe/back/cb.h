@@ -7,6 +7,7 @@
 typedef enum {
   CB_NODE_UNINITIALIZED,
   #include "node_kind.def"
+  #include "x64_node_kind.def"
   NUM_CB_NODE_KINDS,
 } cb_node_kind_t;
 #undef X
@@ -23,7 +24,7 @@ typedef enum {
   CB_NODE_FLAG_IS_PROJ = BIT(1),
   CB_NODE_FLAG_IS_CFG = BIT(2),
   CB_NODE_FLAG_READS_MEMORY = BIT(3),
-  CB_NODE_FLAG_WRITES_MEMORY = BIT(4),
+  CB_NODE_FLAG_PRODUCES_MEMORY = BIT(4),
   CB_NODE_FLAG_STARTS_BASIC_BLOCK = BIT(5),
   CB_NODE_FLAG_IS_PINNED = BIT(6),
 } cb_node_flags_t;
@@ -37,6 +38,7 @@ struct cb_node_t {
   int num_ins;
 
   cb_use_t* uses;
+  int data_size;
 };
 
 struct cb_use_t {
@@ -147,3 +149,5 @@ void cb_opt_func(cb_opt_context_t* opt, cb_func_t* func);
 cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func);
 
 void cb_dump_func(FILE* stream, cb_func_t* func);
+
+cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* func);

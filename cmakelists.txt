@@ -14,20 +14,31 @@ set(CMAKE_C_STANDARD_REQUIRED True)
 file(MAKE_DIRECTORY "generated")
 
 add_executable(lex_meta "meta/lex_meta.c")
+add_executable(x64_isel_meta "meta/x64_isel_meta.c")
 
-set(DFA_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/dfa.h)
+set(LEX_DFA_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/lex_dfa.h)
+set(X64_ISEL_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/x64_isel.h)
 set(TOKEN_KIND_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/token_kind.h)
 
 add_custom_command(
-  OUTPUT ${DFA_LOCATION} ${TOKEN_KIND_LOCATION}
-  COMMAND lex_meta ${DFA_LOCATION} ${TOKEN_KIND_LOCATION}
+  OUTPUT ${LEX_DFA_LOCATION} ${TOKEN_KIND_LOCATION}
+  COMMAND lex_meta ${LEX_DFA_LOCATION} ${TOKEN_KIND_LOCATION}
   DEPENDS lex_meta
-  COMMENT "Generating dfa."
+  COMMENT "Generating lexer dfa."
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${X64_ISEL_LOCATION}
+  COMMAND x64_isel_meta ${CMAKE_CURRENT_LIST_DIR}/meta/x64.pats ${X64_ISEL_LOCATION}
+  DEPENDS x64_isel_meta ${CMAKE_CURRENT_LIST_DIR}/meta/x64.pats
+  COMMENT "Generating x64 instruction selector."
   VERBATIM
 )
 
 file(GLOB_RECURSE CRINGE_SOURCES "cringe/*.c" "cringe/*.h")
-add_executable(cringe ${CRINGE_SOURCES} ${DFA_LOCATION} ${TOKEN_KIND_LOCATION})
+add_executable(cringe ${CRINGE_SOURCES} ${LEX_DFA_LOCATION} ${TOKEN_KIND_LOCATION} ${X64_ISEL_LOCATION})
 
 target_include_directories(cringe PRIVATE "cringe" "generated")
 target_include_directories(lex_meta PRIVATE "cringe")
+target_include_directories(x64_isel_meta PRIVATE "cringe")

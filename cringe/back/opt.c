@@ -7,23 +7,11 @@ typedef struct {
   vec_t(int) sparse;
 } worklist_t;
 
-typedef struct {
-  bool ins_processed;
-  cb_node_t* node;
-} stack_item_t;
-
 struct cb_opt_context_t {
   cb_func_t* func;
   worklist_t worklist;
-  vec_t(stack_item_t) stack; // reset locally and used for recursive stuff
+  vec_t(bool_node_t) stack; // reset locally and used for recursive stuff
 };
-
-static stack_item_t stack_item(bool ins_processed, cb_node_t* node) {
-  return (stack_item_t) {
-    .ins_processed = ins_processed,
-    .node = node
-  };
-}
 
 static void worklist_add(cb_opt_context_t* opt, cb_node_t* node) {
   worklist_t* w = &opt->worklist;
@@ -150,7 +138,7 @@ static bool recent_memory_effects_all_one_address(cb_opt_context_t* opt, cb_node
   bool result = false;
 
   vec_clear(opt->stack);
-  vec_put(opt->stack, stack_item(false, load->ins[LOAD_MEM]));
+  vec_put(opt->stack, bool_node(false, load->ins[LOAD_MEM]));
 
   cb_node_t* address = load->ins[LOAD_ADDR];
   uint64_t* visited = bitset_alloc(scratch.arena, opt->func->next_id);
@@ -170,7 +158,7 @@ static bool recent_memory_effects_all_one_address(cb_opt_context_t* opt, cb_node
 
       case CB_NODE_PHI: {
         for (int i = 1; i < node->num_ins; ++i) {
-          vec_put(opt->stack, stack_item(false, node->ins[i]));
+          vec_put(opt->stack, bool_node(false, node->ins[i]));
         }
       } break;
 
@@ -201,7 +189,7 @@ static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
 
   vec_clear(opt->stack);
   cb_node_t* first = load->ins[LOAD_MEM];
-  vec_put(opt->stack, stack_item(false, first));
+  vec_put(opt->stack, bool_node(false, first));
 
   // store the value stored at each memory effect
   cb_node_t** map = arena_array(scratch.arena, cb_node_t*, opt->func->next_id);
@@ -211,7 +199,7 @@ static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
 
   // recurse to discover all paths
   while (vec_len(opt->stack)) {
-    stack_item_t item = vec_pop(opt->stack);
+    bool_node_t item = vec_pop(opt->stack);
     cb_node_t* node = item.node;
 
     switch (node->kind) {
@@ -221,7 +209,7 @@ static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
 
       case CB_NODE_PHI: {
 
-        if (!item.ins_processed) {
+        if (!item.processed) {
           if (map[node->id]) {
             continue;
           }
@@ -229,10 +217,10 @@ static cb_node_t* idealize_load(cb_opt_context_t* opt, cb_node_t* load) {
           cb_node_t* new_phi = map[node->id] = cb_node_phi(opt->func);
           worklist_add(opt, new_phi);
 
-          vec_put(opt->stack, stack_item(true, node));
+          vec_put(opt->stack, bool_node(true, node));
 
           for (int i = 1; i < node->num_ins; ++i) {
-            vec_put(opt->stack, stack_item(false, node->ins[i]));
+            vec_put(opt->stack, bool_node(false, node->ins[i]));
           }
         }
         else {
@@ -265,13 +253,14 @@ static idealize_func_t idealize_table[NUM_CB_NODE_KINDS] = {
   [CB_NODE_LOAD] = idealize_load,
 };
 
-static void find_and_remove_use(cb_node_t* user, int index) {
+cb_use_t* find_and_remove_use(cb_node_t* user, int index) {
   for (cb_use_t** pu = &user->ins[index]->uses; *pu;) {
     cb_use_t* u = *pu;
 
     if (u->node == user && u->index == index) {
       *pu = u->next;
-      return;
+      u->next = NULL;
+      return u;
     }
     else {
       pu = &u->next;
@@ -279,11 +268,12 @@ static void find_and_remove_use(cb_node_t* user, int index) {
   }
 
   assert(false);
+  return NULL;
 }
 
 static void remove_node(cb_opt_context_t* opt, cb_node_t* first) {
   vec_clear(opt->stack);
-  vec_put(opt->stack, stack_item(false, first));
+  vec_put(opt->stack, bool_node(false, first));
 
   while (vec_len(opt->stack)) {
     cb_node_t* node = vec_pop(opt->stack).node;
@@ -299,7 +289,7 @@ static void remove_node(cb_opt_context_t* opt, cb_node_t* first) {
       find_and_remove_use(node, i);
 
       if (node->ins[i]->uses == NULL) {
-        vec_put(opt->stack, stack_item(false, node->ins[i]));
+        vec_put(opt->stack, bool_node(false, node->ins[i]));
       }
     }
 
@@ -308,6 +298,8 @@ static void remove_node(cb_opt_context_t* opt, cb_node_t* first) {
 }
 
 static void replace_node(cb_opt_context_t* opt, cb_node_t* target, cb_node_t* source) {
+  assert(target != source);
+
   while (target->uses) {
     cb_use_t* use = target->uses;
     target->uses = use->next;
@@ -343,40 +335,6 @@ static void peepholes(cb_opt_context_t* opt) {
   }
 }
 
-typedef struct {
-  size_t count;
-  cb_node_t** nodes;
-} mem_deps_t;
-
-static mem_deps_t get_mem_deps(arena_t* arena, cb_node_t* node) {
-  mem_deps_t result = {0};
-  result.nodes = arena_array(arena, cb_node_t*, node->num_ins);
-
-  static_assert(NUM_CB_NODE_KINDS == 19, "handle memory dependencies");
-  switch (node->kind) {
-
-    case CB_NODE_PHI: {
-      for (int i = 1; i < node->num_ins; ++i) {
-        result.nodes[result.count++] = node->ins[i];
-      }
-    } break;
-
-    case CB_NODE_LOAD: {
-      result.nodes[result.count++] = node->ins[LOAD_MEM];
-    } break;
-
-    case CB_NODE_STORE: {
-      result.nodes[result.count++] = node->ins[STORE_MEM];
-    } break;
-
-    case CB_NODE_END: {
-      result.nodes[result.count++] = node->ins[END_MEM];
-    } break;
-  }
-
-  return result;
-}
-
 typedef enum {
   DSE_NO_LOADS,
   DSE_LOADS,
@@ -400,7 +358,7 @@ static void dead_store_elim(cb_opt_context_t* opt) {
     cb_node_t* node = walk.nodes[i];
 
     if (node->flags & CB_NODE_FLAG_READS_MEMORY) {
-      vec_put(opt->stack, stack_item(false, node));
+      vec_put(opt->stack, bool_node(false, node));
     }
 
     if (node->kind == CB_NODE_STORE) {
@@ -418,10 +376,16 @@ static void dead_store_elim(cb_opt_context_t* opt) {
 
     states[node->id] = DSE_LOADS;
 
-    mem_deps_t deps = get_mem_deps(scratch.arena, node);
+    for (int i = 0; i < node->num_ins; ++i) {
+      cb_node_t* in = node->ins[i];
 
-    for (size_t i = 0; i < deps.count; ++i) {
-      vec_put(opt->stack, stack_item(false, deps.nodes[i]));
+      if (!in) {
+        continue;
+      }
+
+      if (in->flags & CB_NODE_FLAG_PRODUCES_MEMORY) {
+        vec_put(opt->stack, bool_node(false, in));
+      }
     }
   }
 
