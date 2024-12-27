@@ -18,6 +18,55 @@ typedef struct {
   vec_t(root_reference_t) root_refs;
 } sel_context_t;
 
+typedef uint32_t reg_t;
+
+enum {
+  PR_EAX,
+  PR_ECX,
+  PR_EDX,
+  FIRST_VR,
+  NUM_PRS = FIRST_VR
+};
+
+typedef struct {
+  int dummy;
+} alloca_t;
+
+#define INST_MAX_READS 4
+#define INST_MAX_WRITES 4
+
+typedef struct {
+  int op;
+
+  int num_writes;
+  int num_reads;
+
+  reg_t writes[INST_MAX_WRITES];
+  reg_t reads[INST_MAX_READS];
+
+  uint64_t data;
+} machine_inst_t;
+
+typedef struct machine_block_t machine_block_t;
+struct machine_block_t {
+  int id;
+  machine_block_t* next;
+  vec_t(machine_inst_t) code;
+
+  int successor_count;
+  int predecessor_count;
+
+  machine_block_t* successors[2];
+  machine_block_t** predecessors;
+};
+
+typedef struct {
+  arena_t* arena;
+  reg_t* reg_map;
+  reg_t next_reg;
+  machine_block_t* mb;
+} gen_context_t;
+
 static void map_input(sel_context_t* s, cb_node_t* new_node, int new_index, cb_node_t* in) {
   assert(in);
 
@@ -199,7 +248,19 @@ static uint32_t get_const_32(cb_node_t* n) {
   return (uint32_t)DATA(n, constant_data_t)->value;
 }
 
-#include "x64_isel.h"
+typedef struct {
+  alloca_t* loc;
+  uint32_t i;
+} mov32_mi_data_t;
+
+static uint64_t make_mov32_mi_data(gen_context_t* g, alloca_t* loc, uint32_t i) {
+  mov32_mi_data_t* d = arena_type(g->arena, mov32_mi_data_t);
+  d->loc = loc;
+  d->i = i;
+  return (uint64_t)d;
+}
+
+#include "x64_isa.h"
 
 cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
   scratch_t scratch = scratch_get(1, &arena);
@@ -283,3 +344,66 @@ cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
 
   return new_func;
 };
+
+void cb_generate_x64(cb_func_t* func) {
+  scratch_t scratch = scratch_get(0, NULL);  
+
+  cb_gcm_result_t gcm = cb_run_global_code_motion(scratch.arena, func);
+
+  machine_block_t** block_map = arena_array(scratch.arena, machine_block_t*, gcm.block_count);
+
+  machine_block_t block_head = {0};
+  machine_block_t* block_tail = &block_head;
+
+  reg_t* reg_map = arena_array(scratch.arena, reg_t, func->next_id);
+
+  foreach_list(cb_block_t, b, gcm.cfg) {
+    machine_block_t* mb = block_tail = block_tail->next = arena_type(scratch.arena, machine_block_t);
+    mb->id = b->id;
+    block_map[b->id] = mb;
+  }
+
+  foreach_list(cb_block_t, b, gcm.cfg) {
+    machine_block_t* mb = block_map[b->id];
+
+    mb->successor_count = b->successor_count;
+    mb->predecessor_count = b->predecessor_count;
+
+    mb->predecessors = arena_array(scratch.arena, machine_block_t*, mb->predecessor_count);
+
+    for (int i = 0; i < mb->successor_count; ++i) {
+      mb->successors[i] = block_map[b->successors[i]->id];
+    }
+
+    for (int i = 0; i < mb->predecessor_count; ++i) {
+      mb->predecessors[i] = block_map[b->predecessors[i]->id];
+    }
+  }
+
+  gen_context_t g = {
+    .arena = scratch.arena,
+    .reg_map = reg_map,
+    .next_reg = FIRST_VR
+  };
+
+  foreach_list(cb_block_t, b, gcm.cfg) {
+    machine_block_t* mb = block_map[b->id];
+
+    g.mb = mb;
+
+    for (int i = 0; i < b->node_count; ++i) {
+      cb_node_t* node = b->nodes[i];
+
+      #define X(name, ...) case CB_NODE_##name: reg_map[node->id] = gen_##name(&g, node); break;
+      switch (node->kind) {
+        default:
+          assert(false);
+          break;
+        #include "x64_node_kind.def"
+      }
+      #undef X
+    }
+  }
+
+  scratch_release(&scratch);
+}

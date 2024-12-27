@@ -82,6 +82,7 @@ int main() {
   cb_graphviz_func(stdout, x64_func);
 
   cb_dump_func(stdout, x64_func);
+  cb_generate_x64(x64_func);
 
   return 0;
 }

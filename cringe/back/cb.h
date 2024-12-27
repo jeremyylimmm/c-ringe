@@ -151,3 +151,4 @@ cb_gcm_result_t cb_run_global_code_motion(cb_arena_t* arena, cb_func_t* func);
 void cb_dump_func(FILE* stream, cb_func_t* func);
 
 cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* func);
+void cb_generate_x64(cb_func_t* func);

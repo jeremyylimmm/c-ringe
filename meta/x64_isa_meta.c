@@ -36,7 +36,9 @@ enum {
   TOK_EOF = 0,
   TOK_IDENT = 256,
   TOK_ARROW,
-  TOK_STRING
+  TOK_STRING,
+  TOK_DIRECTIVE,
+  TOK_INT_LITERAL,
 };
 
 typedef struct {
@@ -57,6 +59,21 @@ typedef struct {
   rule_t* rules_head;
   int rule_count;
 } op_entry_t;
+
+typedef struct inst_t inst_t;
+struct inst_t {
+  inst_t* next;
+
+  token_t name;
+
+  int num_writes;
+  int num_reads;
+  int num_params;
+
+  token_t writes[8];
+  token_t reads[8];
+  token_t params[8];
+};
 
 static op_entry_t table[TABLE_CAPACITY];
 
@@ -87,7 +104,7 @@ static op_entry_t* get_op_entry(token_t token) {
   exit(1);
 }
 
-static char* load_pats(const char* path) {
+static char* load_isa(const char* path) {
   FILE* file;
   if (fopen_s(&file, path, "r")) {
     printf("Failed to read '%s'\n", path);
@@ -139,7 +156,14 @@ static token_t lex(lexer_t* l) {
 
   switch (*start) {
     default:
-      if (is_ident(*start)) {
+      if (isdigit(*start)) {
+        while (isdigit(*l->p)) {
+          l->p++;
+        }
+
+        kind = TOK_INT_LITERAL;
+      }
+      else if (is_ident(*start)) {
         while (is_ident(*l->p)) {
           l->p++;
         }
@@ -168,6 +192,13 @@ static token_t lex(lexer_t* l) {
       }
       l->p++;
       kind = TOK_STRING;
+    } break;
+
+    case '#': {
+      while (is_ident(*l->p)) {
+        l->p++;
+      }
+      kind = TOK_DIRECTIVE;
     } break;
   }
 
@@ -287,19 +318,125 @@ static void parse_rule(lexer_t* l) {
   in_entry->rules_head = rule;
 }
 
-static void parse_system(const char* pats_path) {
-  char* pats = load_pats(pats_path);
+static bool reached_directive(lexer_t* l, const char* name) {
+  if (peek(l).kind != TOK_DIRECTIVE) {
+    return false;
+  }
+
+  token_t t = peek(l);
+
+  return t.length == strlen(name) + 1 && memcmp(t.start+1, name, t.length-1) == 0;
+}
+
+static void inst_checked_push(token_t* array, int capacity, int* count, token_t tok, char* name) {
+  if (*count == capacity) {
+    printf("line %d: maximum number of %s (%d) reached\n", tok.line, name, capacity);
+    exit(1);
+  }
+
+  array[(*count)++] = tok;
+}
+
+static inst_t* parse_instruction(lexer_t* l) {
+  inst_t* inst = calloc(1, sizeof(inst_t));
+
+  while (peek(l).kind != '=' && peek(l).kind != TOK_EOF) {
+    if (inst->num_writes > 0) {
+      expect(l, ',', "separate writes with ','");
+    }
+
+    token_t tok = lex(l);
+
+    if (tok.kind != TOK_IDENT && tok.kind != TOK_INT_LITERAL) {
+      printf("line %d: write must be a register name or an integer\n", tok.line);
+      exit(1);
+    }
+
+    if (tok.length == 1 && tok.start[0] == '_') {
+      continue;
+    }
+
+    inst_checked_push(inst->writes, ARRAY_LENGTH(inst->writes), &inst->num_writes, tok, "writes");
+  }
+
+  expect(l, '=', "expected an '='");
+
+  inst->name = expect(l, TOK_IDENT, "expected an instruction name");
+
+  while (peek(l).kind != ';' && peek(l).kind != TOK_EOF && peek(l).kind != ':') {
+    if (inst->num_reads > 0) {
+      expect(l, ',', "separate reads with ','");
+    }
+
+    token_t tok = lex(l);
+
+    if (tok.kind != TOK_INT_LITERAL && tok.kind != TOK_IDENT && tok.kind != TOK_STRING) {
+      printf("line %d: read must be a register name, integer or code literal (string)\n", tok.line);
+      exit(1);
+    }
+
+    if (tok.length == 1 && tok.start[0] == '_') {
+      continue;
+    }
+
+    inst_checked_push(inst->reads, ARRAY_LENGTH(inst->reads), &inst->num_reads, tok, "reads");
+  }
+
+  if (peek(l).kind == ':') {
+    lex(l);
+
+    for (;;) {
+      if (inst->num_params > 0) {
+        expect(l, ',', "separate params with ','");
+      }
+
+      inst_checked_push(inst->params, ARRAY_LENGTH(inst->params), &inst->num_params, expect(l, TOK_STRING, "param must be a string"), "params");
+
+      if (peek(l).kind == ';') {
+        break;
+      }
+    }
+  }
+
+  expect(l, ';', "terminate instructions with ';'");
+
+  return inst;
+}
+
+static inst_t* parse_isa(const char* pats_path) {
+  char* isa = load_isa(pats_path);
 
   lexer_t l = {
-    .p = pats,
+    .p = isa,
     .line = 1
   };
+
+  if (!reached_directive(&l, "instructions")) {
+    printf("error on line %d: expected '#instructions'\n", peek(&l).line);
+    exit(1);
+  }
+
+  lex(&l);
+
+  inst_t inst_head = {0};
+  inst_t* inst_tail = &inst_head;
+
+  while (peek(&l).kind != TOK_DIRECTIVE) {
+    inst_tail = inst_tail->next = parse_instruction(&l);
+  }
+
+  if (!reached_directive(&l, "patterns")) {
+    printf("error on line %d: expected '#patterns'\n", peek(&l).line);
+    exit(1);
+  }
+
+  lex(&l);
 
   while (peek(&l).kind != TOK_EOF) {
     parse_rule(&l);
   }
 
-  free(pats);
+  return inst_head.next;
 }
 
 static void write_node_match(FILE* file, const char* c_value, node_t* node, bool is_root) {
@@ -437,6 +574,53 @@ static void format_uppercase(char* buf, size_t buf_size, const char* name) {
   buf[i] = '\0';
 }
 
+static int parse_int_literal(token_t tok) {
+  assert(tok.kind == TOK_INT_LITERAL);
+
+  int value = 0;
+
+  for (int j = 0; j < tok.length; ++j) {
+    value *= 10;
+    value += tok.start[j] - '0';
+  }
+
+  return value;
+}
+
+static void print_token_uppercase(FILE* file, token_t tok) {
+  for (int i = 0; i < tok.length; ++i) {
+    fprintf(file, "%c", toupper(tok.start[i]));
+  }
+}
+
+static void write_inst_regs(FILE* file, char* name, int tok_count, token_t* toks) {
+  int count = 0;
+
+  for (int i = 0; i < tok_count; ++i) {
+    token_t tok = toks[i];
+
+    if (tok.kind == TOK_STRING) {
+      continue;
+    }
+
+    fprintf(file, "    .%s[%d] = ", name, count++);
+
+    switch (tok.kind) {
+      case TOK_INT_LITERAL: {
+        fprintf(file, "r%d,\n", parse_int_literal(tok)); 
+      } break;
+
+      case TOK_IDENT: {
+        fprintf(file, "PR_");
+        print_token_uppercase(file, tok);
+        fprintf(file, ",\n");
+      } break;
+    }
+  }
+
+  fprintf(file, "    .num_%s = %d,\n", name, count);
+}
+
 int main(int argc, char** argv) {
   if (argc != 3) {
     printf("Usage: %s <pats> <dfa>\n", argv[0]);
@@ -446,7 +630,7 @@ int main(int argc, char** argv) {
   const char* pats_path = argv[1];
   const char* dfa_path = argv[2];
 
-  parse_system(pats_path);
+  inst_t* inst_head = parse_isa(pats_path);
 
   FILE* file;
   if(fopen_s(&file, dfa_path, "w")) {
@@ -456,6 +640,98 @@ int main(int argc, char** argv) {
 
   fprintf(file, "#pragma once\n\n");
   fprintf(file, "#include \"back/internal.h\"\n\n");
+
+  fprintf(file, "enum {\n");
+  fprintf(file, "  X64_INST_UNINITIALIZED,\n");
+
+  foreach_list(inst_t, inst, inst_head) {
+    fprintf(file, "  X64_INST_");
+
+    for (int i = 0; i < inst->name.length; ++i) {
+      fprintf(file, "%c", toupper(inst->name.start[i]));
+    }
+
+    fprintf(file, ",\n");
+  }
+
+  fprintf(file, "};\n\n");
+
+  foreach_list(inst_t, inst, inst_head) {
+    bool inputs[8] = {0};
+
+    int num_regs = 0;
+    token_t regs[ARRAY_LENGTH(inst->writes) + ARRAY_LENGTH(inst->reads)];
+
+    for (int i = 0; i < inst->num_writes; ++i) {
+      if (inst->writes[i].kind == TOK_INT_LITERAL) {
+        regs[num_regs++] = inst->writes[i];
+      }
+    }
+
+    for (int i = 0; i < inst->num_reads; ++i) {
+      if (inst->reads[i].kind == TOK_INT_LITERAL) {
+        regs[num_regs++] = inst->reads[i];
+      }
+    }
+
+    for (int i = 0; i < num_regs; ++i) {
+      token_t tok = regs[i];
+      int value = parse_int_literal(tok);
+
+      if (value >= ARRAY_LENGTH(inputs)) {
+        printf("line %d: register '%d' is over the maximum (%d)\n", tok.line, value, (int)ARRAY_LENGTH(inputs));
+        exit(1);
+      }
+
+      inputs[value] = true;
+    }
+
+    fprintf(file, "static machine_inst_t inst_%.*s(gen_context_t* g", inst->name.length, inst->name.start);
+
+    bool has_false = false;
+
+    for (int i = 0; i < ARRAY_LENGTH(inputs); ++i) {
+      if (!inputs[i]) {
+        has_false = true;
+      }
+      else {
+        if (has_false) {
+          printf("line %d: numbered-registers are not contiguous\n", inst->name.line);
+          exit(1); 
+        }
+
+        fprintf(file, ", reg_t r%d", i);
+      }
+    }
+
+    for (int i = 0; i < inst->num_params; ++i) {
+      fprintf(file, ", %.*s", inst->params[i].length-2, inst->params[i].start+1);
+    }
+
+    fprintf(file, ") {\n");
+
+    fprintf(file, "  (void)g;\n");
+
+    fprintf(file, "  return (machine_inst_t) {\n");
+    fprintf(file, "    .op = X64_INST_");
+    print_token_uppercase(file, inst->name);
+    fprintf(file, ",\n");
+
+    write_inst_regs(file, "writes", inst->num_writes, inst->writes);
+    write_inst_regs(file, "reads", inst->num_reads, inst->reads);
+
+    for (int i = 0; i < inst->num_reads; ++i) {
+      token_t tok = inst->reads[i];
+
+      if (tok.kind == TOK_STRING) {
+        fprintf(file, "    .data = %.*s,\n", tok.length-2, tok.start+1);
+      }
+    }
+
+    fprintf(file, "  };\n");
+
+    fprintf(file, "}\n\n");
+  }
 
   fprintf(file, "#define IN(node, input) (assert(input < (node->num_ins)), node->ins[input])\n\n");
 
@@ -540,6 +816,8 @@ int main(int argc, char** argv) {
 
     fprintf(file, "}\n\n");
   }
+
+  fprintf(file, "#undef IN\n\n");
 
   fclose(file);
 
