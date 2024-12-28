@@ -60,6 +60,7 @@ typedef struct {
 typedef struct machine_block_t machine_block_t;
 struct machine_block_t {
   cb_block_t* b;
+  int terminator_count;
 
   int id;
   machine_block_t* next;
@@ -74,6 +75,10 @@ struct machine_block_t {
 
 typedef struct {
   arena_t* arena;
+
+  machine_block_t** block_map;
+  cb_gcm_result_t* gcm;
+
   reg_t* reg_map;
   reg_t next_reg;
   machine_block_t* mb;
@@ -178,7 +183,6 @@ SELF_SEL(PHI)
 
 SELF_SEL(ALLOCA)
 
-SELF_SEL(BRANCH)
 SELF_SEL(BRANCH_TRUE)
 SELF_SEL(BRANCH_FALSE)
 
@@ -260,6 +264,13 @@ static cb_node_t* targ_node_end32(sel_context_t* s, cb_node_t* ctrl, cb_node_t* 
 static uint32_t get_const_32(cb_node_t* n) {
   assert(n->kind == CB_NODE_CONSTANT);
   return (uint32_t)DATA(n, constant_data_t)->value;
+}
+
+static cb_node_t* targ_node_branch32(sel_context_t* s, cb_node_t* ctrl, cb_node_t* predicate) {
+  cb_node_t* node = new_node(s->new_func, CB_NODE_X64_BRANCH32, 2, 0, CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_IS_PINNED);
+  set_input(s->new_func, node, ctrl, 0);
+  set_input(s->new_func, node, predicate, 1);
+  return node;
 }
 
 typedef struct {
@@ -475,6 +486,45 @@ static reg_t gen_X64_END32(gen_context_t* g, cb_node_t* node) {
   return NULL_REG;
 }
 
+static reg_t gen_X64_BRANCH32(gen_context_t* g, cb_node_t* node) {
+  cb_node_t* proj_true = NULL;
+  cb_node_t* proj_false = NULL;
+
+  foreach_list (cb_use_t, u, node->uses) {
+    switch (u->node->kind) {
+      case CB_NODE_BRANCH_TRUE:
+        proj_true = u->node;
+        break;
+      case CB_NODE_BRANCH_FALSE:
+        proj_false = u->node;
+        break;
+    }
+  }
+  
+  machine_block_t* block_true = g->block_map[g->gcm->map[proj_true->id]->id];
+  machine_block_t* block_false = g->block_map[g->gcm->map[proj_false->id]->id];
+
+  vec_put(g->mb->code, inst_test32(g, IN(1), IN(1)));
+  vec_put(g->mb->code, inst_jz(g, block_false));
+  vec_put(g->mb->code, inst_jmp(g, block_true));
+
+  g->mb->terminator_count = 2;
+
+  return NULL_REG;
+}
+
+static void insert_before_n(machine_block_t* mb, machine_inst_t inst, int n) {
+  machine_inst_t blank = {0};
+  vec_put(mb->code, blank);
+
+  int i;
+  for (i = (int)vec_len(mb->code)-1; i >= vec_len(mb->code)-n; --i) {
+    mb->code[i] = mb->code[i-1];
+  }
+
+  mb->code[i] = inst;
+}
+
 void cb_generate_x64(cb_func_t* func) {
   scratch_t scratch = scratch_get(0, NULL);  
 
@@ -516,6 +566,10 @@ void cb_generate_x64(cb_func_t* func) {
 
   gen_context_t g = {
     .arena = scratch.arena,
+    
+    .gcm = &gcm,
+    .block_map = block_map,
+
     .reg_map = reg_map,
     .next_reg = FIRST_VR,
     .alloca_map = alloca_map
@@ -564,7 +618,6 @@ void cb_generate_x64(cb_func_t* func) {
           }
         } break;
 
-        case CB_NODE_BRANCH:
         case CB_NODE_BRANCH_TRUE:
         case CB_NODE_BRANCH_FALSE:
         {
@@ -573,6 +626,11 @@ void cb_generate_x64(cb_func_t* func) {
         #include "x64_node_kind.def"
       }
       #undef X
+    }
+
+    if (mb->successor_count == 1) {
+      vec_put(mb->code, inst_jmp(&g, mb->successors[0]));
+      mb->terminator_count = 1;
     }
   }
 
@@ -588,7 +646,7 @@ void cb_generate_x64(cb_func_t* func) {
       cb_node_t* in = phi->ins[j];
       machine_block_t* pred = block_map[gcm.map[in->id]->id];
 
-      vec_put(pred->code, inst_mov32_rr(&g, temp, reg_map[in->id]));
+      insert_before_n(pred, inst_mov32_rr(&g, temp, reg_map[in->id]), pred->terminator_count);
     }
 
     prepend(mb, inst_mov32_rr(&g, reg_map[phi->id], temp));

@@ -16,9 +16,13 @@ eax = idiv_r 0, edx, eax; "idiv %0"
 0 = mov32_rr 1; "mov %0, %1"
 
 _ = mov32_mr "(uint64_t)loc", 0 : "alloca_t* loc"; "mov [bruh], %0"
-_ = mov32_mi "make_mov32_mi_data(g, loc, i)" : "alloca_t* loc", "uint32_t i"; "mov [bruh] {((mov32_mi_data_t*)inst->data)->i:u}"
+_ = mov32_mi "make_mov32_mi_data(g, loc, i)" : "alloca_t* loc", "uint32_t i"; "mov [bruh], {((mov32_mi_data_t*)inst->data)->i:u}"
 
 _ = ret; "ret"
+
+_ = test32 0, 1; "test %0, %1"
+_ = jz "(uint64_t)loc" : "machine_block_t* loc"; "jz bb_{((machine_block_t*)inst->data)->id:u}"
+_ = jmp "(uint64_t)loc" : "machine_block_t* loc"; "jmp bb_{((machine_block_t*)inst->data)->id:u}"
 
 #patterns
 
@@ -40,3 +44,5 @@ store(c, m, a, constant:x()) -> mov32_mi(c, m, a, "get_const_32(x)")
 load(c, m, a) -> mov32_rm(c, m, a)
 
 end(c, m, v) -> end32(c, m, v)
+
+branch(c, p) -> branch32(c, p)

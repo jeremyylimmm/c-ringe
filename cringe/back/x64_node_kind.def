@@ -16,3 +16,5 @@ X(X64_MOV32_MR, "x64_mov32_mr")
 X(X64_MOV32_MI, "x64_mov32_mi")
 
 X(X64_END32, "x64_end32")
+
+X(X64_BRANCH32, "x64_branch32")
