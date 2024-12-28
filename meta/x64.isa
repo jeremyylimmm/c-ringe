@@ -1,24 +1,24 @@
 #instructions
 
-0 = add32_rr 0, 1;
-0 = sub32_rr 0, 1;
-0 = mul32_rr 0, 1;
+0 = add32_rr 0, 1; "add %0, %1"
+0 = sub32_rr 0, 1; "sub %0, %1"
+0 = mul32_rr 0, 1; "mul %0, %1"
 
-edx, eax = cdq eax;
-eax = idiv_r 0, edx, eax;
+edx, eax = cdq eax; "cdq"
+eax = idiv_r 0, edx, eax; "idiv %0"
 
-0 = add32_ri 0, "(uint64_t)x" : "uint32_t x";
-0 = kill32;
+0 = add32_ri 0, "(uint64_t)x" : "uint32_t x"; "add %0, {(uint32_t)inst->data:u}"
+0 = kill32; "kill32 %0"
 
-0 = mov32_ri "(uint64_t)x" : "uint32_t x";
-0 = mov32_rm "(uint64_t)loc" : "alloca_t* loc";
+0 = mov32_ri "(uint64_t)x" : "uint32_t x"; "mov %0, {(uint32_t)inst->data:u}"
+0 = mov32_rm "(uint64_t)loc" : "alloca_t* loc"; "mov %0, [bruh]"
 
-0 = mov32_rr 1;
+0 = mov32_rr 1; "mov %0, %1"
 
-_ = mov32_mr "(uint64_t)loc", 0 : "alloca_t* loc";
-_ = mov32_mi "make_mov32_mi_data(g, loc, i)" : "alloca_t* loc", "uint32_t i";
+_ = mov32_mr "(uint64_t)loc", 0 : "alloca_t* loc"; "mov [bruh], %0"
+_ = mov32_mi "make_mov32_mi_data(g, loc, i)" : "alloca_t* loc", "uint32_t i"; "mov [bruh] {((mov32_mi_data_t*)inst->data)->i:u}"
 
-_ = ret;
+_ = ret; "ret"
 
 #patterns
 

@@ -1,4 +1,8 @@
+#include <stdarg.h>
+
 #include "internal.h"
+
+#define NULL_REG 0xffffffff
 
 typedef struct {
   int32_t value;
@@ -28,6 +32,12 @@ enum {
   NUM_PRS = FIRST_VR
 };
 
+static char* pr_names32[NUM_PRS] = {
+  "eax",
+  "ecx",
+  "edx"
+};
+
 typedef struct {
   int dummy;
 } alloca_t;
@@ -49,6 +59,8 @@ typedef struct {
 
 typedef struct machine_block_t machine_block_t;
 struct machine_block_t {
+  cb_block_t* b;
+
   int id;
   machine_block_t* next;
   vec_t(machine_inst_t) code;
@@ -65,6 +77,7 @@ typedef struct {
   reg_t* reg_map;
   reg_t next_reg;
   machine_block_t* mb;
+  alloca_t** alloca_map;
 } gen_context_t;
 
 static void map_input(sel_context_t* s, cb_node_t* new_node, int new_index, cb_node_t* in) {
@@ -176,6 +189,7 @@ static cb_node_t* targ_node_bin(sel_context_t* s, cb_node_kind_t kind, cb_node_t
   return node;
 }
 
+
 static cb_node_t* targ_node_add32_rr(sel_context_t* s, cb_node_t* left, cb_node_t* right) {
   return targ_node_bin(s, CB_NODE_X64_ADD32_RR, left, right);
 }
@@ -258,6 +272,29 @@ static uint64_t make_mov32_mi_data(gen_context_t* g, alloca_t* loc, uint32_t i) 
   d->loc = loc;
   d->i = i;
   return (uint64_t)d;
+}
+
+
+static char* format_string(arena_t* arena, char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+
+  int count = vsnprintf(NULL, 0, fmt, ap);
+  char* buf = arena_push(arena, (count+1) * sizeof(char));
+  vsnprintf(buf, (count+1) * sizeof(char), fmt, ap);
+
+  va_end(ap);
+
+  return buf;
+}
+
+static char* format_reg32(arena_t* arena, reg_t reg) {
+  if (reg >= FIRST_VR) {
+    return format_string(arena, "%%%u", reg);
+  }
+  else {
+    return format_string(arena, "%s", pr_names32[reg]);
+  }
 }
 
 #include "x64_isa.h"
@@ -345,6 +382,99 @@ cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
   return new_func;
 };
 
+#define IN(idx) g->reg_map[node->ins[idx]->id]
+
+static reg_t new_reg(gen_context_t* g) {
+  return g->next_reg++;
+}
+
+static void prepend(machine_block_t* mb, machine_inst_t inst) {
+  machine_inst_t blank = {0};
+  vec_put(mb->code, blank);
+
+  for (int i = (int)vec_len(mb->code)-1; i >= 1; --i) {
+    mb->code[i] = mb->code[i-1];
+  }
+
+  mb->code[0] = inst;
+}
+
+static reg_t gen_binary_rr(gen_context_t* g, cb_node_t* node, machine_inst_t(*make_inst)(gen_context_t*, reg_t, reg_t)) {
+  reg_t dest = new_reg(g);
+
+  vec_put(g->mb->code, inst_mov32_rr(g, dest, IN(BINARY_LHS)));
+  vec_put(g->mb->code, make_inst(g, dest, IN(BINARY_RHS)));
+
+  return dest;
+}
+
+static reg_t gen_X64_ADD32_RR(gen_context_t* g, cb_node_t* node) {
+  return gen_binary_rr(g, node, inst_add32_rr);
+}
+
+static reg_t gen_X64_SUB32_RR(gen_context_t* g, cb_node_t* node) {
+  return gen_binary_rr(g, node, inst_sub32_rr);
+}
+
+static reg_t gen_X64_MUL32_RR(gen_context_t* g, cb_node_t* node) {
+  return gen_binary_rr(g, node, inst_mul32_rr);
+}
+
+static reg_t gen_X64_IDIV32_RR(gen_context_t* g, cb_node_t* node) {
+  reg_t dest = new_reg(g);
+
+  vec_put(g->mb->code, inst_mov32_rr(g, PR_EAX, IN(BINARY_LHS)));
+  vec_put(g->mb->code, inst_cdq(g));
+  vec_put(g->mb->code, inst_idiv_r(g, IN(BINARY_RHS)));
+  vec_put(g->mb->code, inst_mov32_rr(g, dest, PR_EAX));
+
+  return dest;
+}
+
+static reg_t gen_X64_ADD32_RI(gen_context_t* g, cb_node_t* node) {
+  reg_t dest = new_reg(g);
+
+  vec_put(g->mb->code, inst_mov32_rr(g, dest, IN(0)));
+  vec_put(g->mb->code, inst_add32_ri(g, dest, *DATA(node, uint32_t)));
+
+  return dest;
+}
+
+static reg_t gen_X64_KILL32(gen_context_t* g, cb_node_t* node) {
+  (void)node;
+  reg_t dest = new_reg(g);
+  vec_put(g->mb->code, inst_kill32(g, dest));
+  return dest;
+}
+
+static reg_t gen_X64_MOV32_RI(gen_context_t* g, cb_node_t* node) {
+  reg_t dest = new_reg(g);
+  vec_put(g->mb->code, inst_mov32_ri(g, dest, *DATA(node, uint32_t)));
+  return dest;
+}
+
+static reg_t gen_X64_MOV32_RM(gen_context_t* g, cb_node_t* node) {
+  reg_t dest = new_reg(g);
+  vec_put(g->mb->code, inst_mov32_rm(g, dest, g->alloca_map[IN(2)]));
+  return dest;
+}
+
+static reg_t gen_X64_MOV32_MR(gen_context_t* g, cb_node_t* node) {
+  vec_put(g->mb->code, inst_mov32_mr(g, IN(3), g->alloca_map[IN(2)]));
+  return NULL_REG;
+}
+
+static reg_t gen_X64_MOV32_MI(gen_context_t* g, cb_node_t* node) {
+  vec_put(g->mb->code, inst_mov32_mi(g, g->alloca_map[IN(2)], *DATA(node, uint32_t)));
+  return NULL_REG;
+}
+
+static reg_t gen_X64_END32(gen_context_t* g, cb_node_t* node) {
+  vec_put(g->mb->code, inst_mov32_rr(g, PR_EAX, IN(2)));
+  vec_put(g->mb->code, inst_ret(g));
+  return NULL_REG;
+}
+
 void cb_generate_x64(cb_func_t* func) {
   scratch_t scratch = scratch_get(0, NULL);  
 
@@ -356,9 +486,11 @@ void cb_generate_x64(cb_func_t* func) {
   machine_block_t* block_tail = &block_head;
 
   reg_t* reg_map = arena_array(scratch.arena, reg_t, func->next_id);
+  alloca_t** alloca_map = arena_array(scratch.arena, alloca_t*, func->next_id);
 
   foreach_list(cb_block_t, b, gcm.cfg) {
     machine_block_t* mb = block_tail = block_tail->next = arena_type(scratch.arena, machine_block_t);
+    mb->b = b;
     mb->id = b->id;
     block_map[b->id] = mb;
   }
@@ -380,16 +512,30 @@ void cb_generate_x64(cb_func_t* func) {
     }
   }
 
+  vec_t(machine_block_t*) stack = NULL;
+
   gen_context_t g = {
     .arena = scratch.arena,
     .reg_map = reg_map,
-    .next_reg = FIRST_VR
+    .next_reg = FIRST_VR,
+    .alloca_map = alloca_map
   };
 
-  foreach_list(cb_block_t, b, gcm.cfg) {
-    machine_block_t* mb = block_map[b->id];
+  vec_put(stack, block_head.next);
+
+  int phi_count = 0;
+  cb_node_t** phis = arena_array(scratch.arena, cb_node_t*, func->next_id);
+
+  while (vec_len(stack)) { // generate the blocks in order specified by dominator tree -> defs dominate their uses except for phis
+    machine_block_t* mb = vec_pop(stack);
+    cb_block_t* b = mb->b;
 
     g.mb = mb;
+
+    for (int i = 0; i < b->dom_children_count; ++i) {
+      cb_block_t* d = b->dom_children[i];
+      vec_put(stack, block_map[d->id]);
+    }
 
     for (int i = 0; i < b->node_count; ++i) {
       cb_node_t* node = b->nodes[i];
@@ -399,11 +545,66 @@ void cb_generate_x64(cb_func_t* func) {
         default:
           assert(false);
           break;
+
+        case CB_NODE_START:
+        case CB_NODE_START_CTRL:
+        case CB_NODE_START_MEM:
+        case CB_NODE_REGION:
+          break;
+
+        case CB_NODE_ALLOCA: {
+          alloca_map[node->id] = arena_type(scratch.arena, alloca_t);
+        } break;
+
+        case CB_NODE_PHI: {
+          reg_map[node->id] = new_reg(&g);
+
+          if (!(node->flags & CB_NODE_FLAG_PRODUCES_MEMORY)) {
+            phis[phi_count++] = node;
+          }
+        } break;
+
+        case CB_NODE_BRANCH:
+        case CB_NODE_BRANCH_TRUE:
+        case CB_NODE_BRANCH_FALSE:
+        {
+        } break;
+
         #include "x64_node_kind.def"
       }
       #undef X
     }
   }
 
+  for (int i = 0; i < phi_count; ++i) {
+    cb_node_t* phi = phis[i];
+
+    cb_node_t* region = phi->ins[0];
+    machine_block_t* mb = block_map[gcm.map[region->id]->id];
+
+    reg_t temp = new_reg(&g);
+
+    for (int j = 1; j < phi->num_ins; ++j) {
+      cb_node_t* in = phi->ins[j];
+      machine_block_t* pred = block_map[gcm.map[in->id]->id];
+
+      vec_put(pred->code, inst_mov32_rr(&g, temp, reg_map[in->id]));
+    }
+
+    prepend(mb, inst_mov32_rr(&g, reg_map[phi->id], temp));
+  }
+
+  foreach_list(machine_block_t, mb, block_head.next) {
+    printf("bb_%d:\n", mb->id);
+    for (int i = 0; i < vec_len(mb->code); ++i) {
+      machine_inst_t* inst = mb->code + i; 
+
+      printf("  ");
+      print_inst(stdout, inst);
+      printf("\n");
+    }
+  }
+
+  vec_free(stack);
   scratch_release(&scratch);
 }

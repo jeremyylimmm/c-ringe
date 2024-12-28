@@ -73,6 +73,8 @@ struct inst_t {
   token_t writes[8];
   token_t reads[8];
   token_t params[8];
+
+  token_t print_string;
 };
 
 static op_entry_t table[TABLE_CAPACITY];
@@ -400,6 +402,8 @@ static inst_t* parse_instruction(lexer_t* l) {
 
   expect(l, ';', "terminate instructions with ';'");
 
+  inst->print_string = expect(l, TOK_STRING, "expected a print string");
+
   return inst;
 }
 
@@ -574,14 +578,13 @@ static void format_uppercase(char* buf, size_t buf_size, const char* name) {
   buf[i] = '\0';
 }
 
-static int parse_int_literal(token_t tok) {
-  assert(tok.kind == TOK_INT_LITERAL);
-
+static int parse_int_literal(const char* start, int length) {
   int value = 0;
 
-  for (int j = 0; j < tok.length; ++j) {
+  for (int j = 0; j < length; ++j) {
     value *= 10;
-    value += tok.start[j] - '0';
+    assert(isdigit(start[j]));
+    value += start[j] - '0';
   }
 
   return value;
@@ -607,7 +610,7 @@ static void write_inst_regs(FILE* file, char* name, int tok_count, token_t* toks
 
     switch (tok.kind) {
       case TOK_INT_LITERAL: {
-        fprintf(file, "r%d,\n", parse_int_literal(tok)); 
+        fprintf(file, "r%d,\n", parse_int_literal(tok.start, tok.length)); 
       } break;
 
       case TOK_IDENT: {
@@ -619,6 +622,17 @@ static void write_inst_regs(FILE* file, char* name, int tok_count, token_t* toks
   }
 
   fprintf(file, "    .num_%s = %d,\n", name, count);
+}
+
+static void record_reg_read_or_write(int* inputs, int inputs_capacity, token_t tok, int code) {
+  int value = parse_int_literal(tok.start, tok.length);
+
+  if (value >= inputs_capacity) {
+    printf("line %d: register '%d' is over the maximum (%d)\n", tok.line, value, inputs_capacity);
+    exit(1);
+  }
+
+  inputs[value] = code;
 }
 
 int main(int argc, char** argv) {
@@ -657,45 +671,35 @@ int main(int argc, char** argv) {
   fprintf(file, "};\n\n");
 
   foreach_list(inst_t, inst, inst_head) {
-    bool inputs[8] = {0};
+    int regs[8] = {0};
 
-    int num_regs = 0;
-    token_t regs[ARRAY_LENGTH(inst->writes) + ARRAY_LENGTH(inst->reads)];
+    {
+      int num_reads = 0;
+      int num_writes = 0;
 
-    for (int i = 0; i < inst->num_writes; ++i) {
-      if (inst->writes[i].kind == TOK_INT_LITERAL) {
-        regs[num_regs++] = inst->writes[i];
-      }
-    }
-
-    for (int i = 0; i < inst->num_reads; ++i) {
-      if (inst->reads[i].kind == TOK_INT_LITERAL) {
-        regs[num_regs++] = inst->reads[i];
-      }
-    }
-
-    for (int i = 0; i < num_regs; ++i) {
-      token_t tok = regs[i];
-      int value = parse_int_literal(tok);
-
-      if (value >= ARRAY_LENGTH(inputs)) {
-        printf("line %d: register '%d' is over the maximum (%d)\n", tok.line, value, (int)ARRAY_LENGTH(inputs));
-        exit(1);
+      for (int i = 0; i < inst->num_reads; ++i) {
+        if (inst->reads[i].kind == TOK_INT_LITERAL) {
+          record_reg_read_or_write(regs, (int)ARRAY_LENGTH(regs), inst->reads[i], ('r' << 16) | (num_reads++));
+        }
       }
 
-      inputs[value] = true;
+      for (int i = 0; i < inst->num_writes; ++i) {
+        if (inst->writes[i].kind == TOK_INT_LITERAL) {
+          record_reg_read_or_write(regs, (int)ARRAY_LENGTH(regs), inst->writes[i], ('w' << 16) | (num_writes++));
+        }
+      }
     }
 
     fprintf(file, "static machine_inst_t inst_%.*s(gen_context_t* g", inst->name.length, inst->name.start);
 
-    bool has_false = false;
+    bool has_gap = false;
 
-    for (int i = 0; i < ARRAY_LENGTH(inputs); ++i) {
-      if (!inputs[i]) {
-        has_false = true;
+    for (int i = 0; i < ARRAY_LENGTH(regs); ++i) {
+      if (regs[i] == 0) {
+        has_gap = true;
       }
       else {
-        if (has_false) {
+        if (has_gap) {
           printf("line %d: numbered-registers are not contiguous\n", inst->name.line);
           exit(1); 
         }
@@ -731,7 +735,138 @@ int main(int argc, char** argv) {
     fprintf(file, "  };\n");
 
     fprintf(file, "}\n\n");
+
+    fprintf(file, "static void print_inst_%.*s(FILE* file, machine_inst_t* inst) {\n", inst->name.length, inst->name.start);
+    fprintf(file, "  scratch_t scratch = scratch_get(0, NULL);\n");
+    fprintf(file, "  (void)scratch;\n");
+    fprintf(file, "  (void)inst;\n");
+
+    fprintf(file, "  fprintf(file, \"");
+
+    token_t ps = inst->print_string;
+    ps.length -= 2;
+    ps.start += 1;
+
+    int param_count = 0;
+    char params[8][64];
+
+    #define ADD_PARAM(fmt, ...) \
+      do {\
+        if (param_count == ARRAY_LENGTH(params)) { \
+          printf("line %d: format param count maximum reached (%d)\n", ps.line, (int)ARRAY_LENGTH(params));\
+          exit(1);\
+        } \
+        char* buf = params[param_count++]; \
+        snprintf(buf, sizeof(params[0]), fmt, __VA_ARGS__); \
+      } while(false)
+
+    for (int i = 0; i < ps.length;) {
+      char c = ps.start[i++];
+
+      switch (c) {
+        default: {
+          fprintf(file, "%c", c);
+        } break;
+
+        case '%': {
+          int start = i;
+          while (i < ps.length && isdigit(ps.start[i])) {
+            i++;
+          }
+
+          int value = parse_int_literal(ps.start+start, i-start);
+
+          if (value >= ARRAY_LENGTH(regs)) {
+            printf("line %d: print string contains format specified '%%%d' is over the maximum of %d\n", ps.line, value, (int)ARRAY_LENGTH(regs));
+            exit(1);
+          }
+
+          fprintf(file, "%%s");
+
+          int code = regs[value];
+
+          char* member = NULL;
+          if (code >> 16 == 'r') {
+            member = "reads";
+          }
+          else {
+            member = "writes";
+          }
+
+          int member_index = code & 0xffff;
+          
+          ADD_PARAM("format_reg32(scratch.arena, inst->%s[%d])", member, member_index);
+        } break;
+
+        case '{': {
+          int param_start = i;
+          while (i < ps.length && ps.start[i] != '}' && ps.start[i] != ':') {
+            ++i;
+          }
+
+          if (i >= ps.length || ps.start[i] != ':') {
+            printf("line %d: print string {} requires a format specified, expected a ':'\n", ps.line);
+            exit(1);
+          }
+
+          int param_end = i++;
+          int format_specifier_start = i;
+
+          while (i < ps.length && ps.start[i] != '}') {
+            ++i;
+          }
+
+          if (i >= ps.length || ps.start[i] != '}') {
+            printf("line %d: print string {} does not close", ps.line);
+            exit(1);
+          }
+
+          int format_specifier_end = i++;
+
+          if (format_specifier_start==format_specifier_end) {
+            printf("line %d: print string {} format specifier is empty\n", ps.line);
+            exit(1);
+          }
+
+          if (param_end==param_start) {
+            printf("line %d: print string {} parameter is empty\n", ps.line);
+            exit(1);
+          }
+
+          fprintf(file, "%%%.*s", format_specifier_end-format_specifier_start, ps.start + format_specifier_start);
+
+          ADD_PARAM("%.*s", param_end-param_start, ps.start + param_start);
+        } break;
+      }
+    }
+
+    fprintf(file, "\"");
+
+    for (int i = 0; i < param_count; ++i) {
+      fprintf(file, ", %s", params[i]);
+    }
+
+    fprintf(file, ");\n");
+
+    fprintf(file, "  scratch_release(&scratch);\n");
+
+    fprintf(file, "}\n\n");
   }
+
+  fprintf(file, "void print_inst(FILE* file, machine_inst_t* inst) {\n");
+
+  fprintf(file, "  switch (inst->op) {\n");
+  fprintf(file, "    default: assert(false); break;\n");
+
+  foreach_list (inst_t, inst, inst_head) {
+    fprintf(file, "    case X64_INST_");
+    print_token_uppercase(file, inst->name);
+    fprintf(file, ": print_inst_%.*s(file, inst); break;\n", inst->name.length, inst->name.start);
+  }
+
+  fprintf(file, "  }\n");
+
+  fprintf(file, "}\n\n");
 
   fprintf(file, "#define IN(node, input) (assert(input < (node->num_ins)), node->ins[input])\n\n");
 
