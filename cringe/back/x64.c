@@ -237,8 +237,33 @@ static char* format_alloca(arena_t* arena, alloca_t* a) {
   return format_string(arena, "STACK%d", a->id);
 }
 
+static reg_t new_reg(gen_context_t* g) {
+  return g->next_reg++;
+}
+
+static machine_block_t* get_branch_dest(gen_context_t* g, cb_node_t* node, cb_node_kind_t proj_kind) {
+  foreach_list(cb_use_t, use, node->uses) {
+    if (use->node->kind == proj_kind) {
+      return g->block_map[g->gcm->map[use->node->id]->id];
+    }
+  }
+
+  assert(false);
+  return NULL;
+}
+
+static machine_block_t* get_branch_then(gen_context_t* g, cb_node_t* node) {
+  return get_branch_dest(g, node, CB_NODE_BRANCH_TRUE);
+}
+
+static machine_block_t* get_branch_else(gen_context_t* g, cb_node_t* node) {
+  return get_branch_dest(g, node, CB_NODE_BRANCH_FALSE);
+}
+
 #define R32(r) format_reg32(scratch.arena, r)
 #define ALLOCA(a) format_alloca(scratch.arena, a)
+
+#define GET_REG(idx) g->reg_map[node->ins[idx]->id]
 
 #include "x64_isa.h"
 
@@ -328,12 +353,6 @@ cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
   return new_func;
 };
 
-#define IN(idx) g->reg_map[node->ins[idx]->id]
-
-static reg_t new_reg(gen_context_t* g) {
-  return g->next_reg++;
-}
-
 static void prepend(machine_block_t* mb, machine_inst_t inst) {
   machine_inst_t blank = {0};
   vec_put(mb->code, blank);
@@ -343,109 +362,6 @@ static void prepend(machine_block_t* mb, machine_inst_t inst) {
   }
 
   mb->code[0] = inst;
-}
-
-static reg_t gen_binary_rr(gen_context_t* g, cb_node_t* node, machine_inst_t(*make_inst)(gen_context_t*, reg_t, reg_t)) {
-  reg_t dest = new_reg(g);
-
-  vec_put(g->mb->code, inst_mov32_rr(g, dest, IN(BINARY_LHS)));
-  vec_put(g->mb->code, make_inst(g, dest, IN(BINARY_RHS)));
-
-  return dest;
-}
-
-static reg_t gen_X64_ADD32_RR(gen_context_t* g, cb_node_t* node) {
-  return gen_binary_rr(g, node, inst_add32_rr);
-}
-
-static reg_t gen_X64_SUB32_RR(gen_context_t* g, cb_node_t* node) {
-  return gen_binary_rr(g, node, inst_sub32_rr);
-}
-
-static reg_t gen_X64_MUL32_RR(gen_context_t* g, cb_node_t* node) {
-  return gen_binary_rr(g, node, inst_mul32_rr);
-}
-
-static reg_t gen_X64_IDIV32_RR(gen_context_t* g, cb_node_t* node) {
-  reg_t dest = new_reg(g);
-
-  vec_put(g->mb->code, inst_mov32_rr(g, PR_EAX, IN(BINARY_LHS)));
-  vec_put(g->mb->code, inst_cdq(g));
-  vec_put(g->mb->code, inst_idiv_r(g, IN(BINARY_RHS)));
-  vec_put(g->mb->code, inst_mov32_rr(g, dest, PR_EAX));
-
-  return dest;
-}
-
-static reg_t gen_X64_ADD32_RI(gen_context_t* g, cb_node_t* node) {
-  reg_t dest = new_reg(g);
-
-  vec_put(g->mb->code, inst_mov32_rr(g, dest, IN(0)));
-  vec_put(g->mb->code, inst_add32_ri(g, dest, *DATA(node, uint32_t)));
-
-  return dest;
-}
-
-static reg_t gen_X64_KILL32(gen_context_t* g, cb_node_t* node) {
-  (void)node;
-  reg_t dest = new_reg(g);
-  vec_put(g->mb->code, inst_kill32(g, dest));
-  return dest;
-}
-
-static reg_t gen_X64_MOV32_RI(gen_context_t* g, cb_node_t* node) {
-  reg_t dest = new_reg(g);
-  vec_put(g->mb->code, inst_mov32_ri(g, dest, *DATA(node, uint32_t)));
-  return dest;
-}
-
-static reg_t gen_X64_MOV32_RM(gen_context_t* g, cb_node_t* node) {
-  reg_t dest = new_reg(g);
-  vec_put(g->mb->code, inst_mov32_rm(g, dest, g->alloca_map[node->ins[2]->id]));
-  return dest;
-}
-
-static reg_t gen_X64_MOV32_MR(gen_context_t* g, cb_node_t* node) {
-  vec_put(g->mb->code, inst_mov32_mr(g, IN(3), g->alloca_map[node->ins[2]->id]));
-  return NULL_REG;
-}
-
-static reg_t gen_X64_MOV32_MI(gen_context_t* g, cb_node_t* node) {
-  vec_put(g->mb->code, inst_mov32_mi(g, g->alloca_map[node->ins[2]->id], *DATA(node, uint32_t)));
-  return NULL_REG;
-}
-
-static reg_t gen_X64_END32(gen_context_t* g, cb_node_t* node) {
-  vec_put(g->mb->code, inst_mov32_rr(g, PR_EAX, IN(2)));
-  vec_put(g->mb->code, inst_ret(g));
-  return NULL_REG;
-}
-
-static reg_t gen_X64_BRANCH32(gen_context_t* g, cb_node_t* node) {
-  cb_node_t* proj_true = NULL;
-  cb_node_t* proj_false = NULL;
-
-  foreach_list (cb_use_t, u, node->uses) {
-    switch (u->node->kind) {
-      case CB_NODE_BRANCH_TRUE:
-        proj_true = u->node;
-        break;
-      case CB_NODE_BRANCH_FALSE:
-        proj_false = u->node;
-        break;
-    }
-  }
-  
-  machine_block_t* block_true = g->block_map[g->gcm->map[proj_true->id]->id];
-  machine_block_t* block_false = g->block_map[g->gcm->map[proj_false->id]->id];
-
-  vec_put(g->mb->code, inst_test32(g, IN(1), IN(1)));
-  vec_put(g->mb->code, inst_jz(g, block_false));
-  vec_put(g->mb->code, inst_jmp(g, block_true));
-
-  g->mb->terminator_count = 2;
-
-  return NULL_REG;
 }
 
 static void insert_before_n(machine_block_t* mb, machine_inst_t inst, int n) {

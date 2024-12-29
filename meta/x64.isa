@@ -30,23 +30,23 @@ _ = jmp "(uint64_t)loc" : "machine_block_t* loc"; "jmp bb_{((machine_block_t*)in
 
 #nodes
 
-add32_rr(left, right);
-sub32_rr(left, right);
-mul32_rr(left, right);
-idiv32_rr(left, right);
+add32_rr(left, right) -> <mov32_rr(dest, 0), add32_rr(dest, 1)>;
+sub32_rr(left, right) -> <mov32_rr(dest, 0), sub32_rr(dest, 1)>;
+mul32_rr(left, right) -> <mov32_rr(dest, 0), mul32_rr(dest, 1)>;
+idiv32_rr(left, right) -> <mov32_rr("PR_EAX", 0), cdq(), idiv_r(1), mov32_rr(dest, "PR_EAX")>;
 
-kill32();
+kill32() -> <kill32(dest)>;
 
-mov32_ri() {"uint32_t", "value"} : "uint32_t value";
-add32_ri(left) {"uint32_t", "right"} : "uint32_t right";
-mov32_mr(ctrl, mem, address, value) (is_pinned, produces_memory);
-mov32_mi(ctrl, mem, address) {"uint32_t", "value"} : "uint32_t value" (is_pinned, produces_memory);
+mov32_ri() {"uint32_t", "value"} : "uint32_t value" -> <mov32_ri(dest, "*DATA(node, uint32_t)")>;
+add32_ri(left) {"uint32_t", "right"} : "uint32_t right" -> <mov32_rr(dest, 0), add32_ri(dest, "*DATA(node, uint32_t)")>;
+mov32_mr(ctrl, mem, address, value) (is_pinned, produces_memory) -> <mov32_mr(3, "g->alloca_map[node->ins[2]->id]")>;
+mov32_mi(ctrl, mem, address) {"uint32_t", "value"} : "uint32_t value" (is_pinned, produces_memory) -> <mov32_mi("g->alloca_map[node->ins[2]->id]", "*DATA(node, uint32_t)")>;
 
-mov32_rm(ctrl, mem, address) (reads_memory);
+mov32_rm(ctrl, mem, address) (reads_memory) -> <mov32_rm(dest, "g->alloca_map[node->ins[2]->id]")>;
 
-end32(ctrl, mem, value) (is_cfg, is_pinned);
+end32(ctrl, mem, value) (is_cfg, is_pinned) -> <mov32_rr("PR_EAX", 2), ret()>;
 
-branch32(ctrl, predicate) (is_cfg, is_pinned);
+branch32(ctrl, predicate) (is_cfg, is_pinned) -> <test32(1, 1), jz("get_branch_else(g, node)"), jmp("get_branch_then(g, node)")>;
 
 
 

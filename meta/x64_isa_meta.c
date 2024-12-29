@@ -77,6 +77,14 @@ struct inst_t {
   token_t print_string;
 };
 
+typedef struct node_inst_t node_inst_t;
+struct node_inst_t {
+  node_inst_t* next;
+  token_t name;
+  int num_params;
+  token_t params[8];
+};
+
 typedef struct node_t node_t;
 struct node_t {
   node_t* next;
@@ -93,6 +101,13 @@ struct node_t {
 
   int num_flags;
   token_t flags[8];
+
+  int num_gen_regs;
+  token_t gen_regs[4];
+
+  bool gen_dest;
+
+  node_inst_t* inst_head;
 };
 
 static op_entry_t table[TABLE_CAPACITY];
@@ -425,6 +440,14 @@ static inst_t* parse_instruction(lexer_t* l) {
   return inst;
 }
 
+static bool token_cmp(token_t a, token_t b) {
+  return a.length == b.length && memcmp(a.start, b.start, a.length * sizeof(char)) == 0;
+}
+
+static bool token_cmp_string(token_t a, const char* str) {
+  return a.length == strlen(str) && memcmp(a.start, str, a.length * sizeof(char)) == 0;
+}
+
 static node_t* parse_node(lexer_t* l) {
   node_t* node = calloc(1, sizeof(node_t));
 
@@ -480,7 +503,80 @@ static node_t* parse_node(lexer_t* l) {
     expect(l, ')', "no closing ')' for node flag list");
   }
 
+  expect(l, TOK_ARROW, "expected a '->'");
+
+  expect(l, '<', "expected a '<>' instruction list");
+
+  node_inst_t inst_head = {0};
+  node_inst_t* inst_tail = &inst_head;
+
+  while (peek(l).kind != '>' && peek(l).kind != TOK_EOF) {
+    if (inst_head.next) {
+      expect(l, ',', "separate node instructions with ','");
+    }
+    
+    node_inst_t* inst = calloc(1, sizeof(node_inst_t));
+    inst->name = expect(l, TOK_IDENT, "expected an instruction name");
+    expect(l, '(', "expected a '()' parameter list");
+
+    while (peek(l).kind != ')' && peek(l).kind != TOK_EOF) {
+      if (inst->num_params == ARRAY_LENGTH(inst->params)) {
+        printf("line %d: maximum parameter count (%d) reached\n", inst->name.line, (int)ARRAY_LENGTH(inst->params));
+        exit(1);
+      }
+
+      if (inst->num_params > 0) {
+        expect(l, ',', "separate parameters with ','");
+      }
+      
+      token_t param = lex(l);
+
+      switch (param.kind) {
+        default:
+          printf("line %d: parameter must be a string, identifier, or integer\n", inst->name.line);
+          exit(1);
+
+        case TOK_IDENT:
+          bool found = false;
+
+          for (int i = 0; !found && i < node->num_gen_regs; ++i) {
+            if (token_cmp(node->gen_regs[i], param)) {
+              found = true;
+            }
+          }
+
+          if (!found) {
+            if (node->num_gen_regs == ARRAY_LENGTH(node->gen_regs)) {
+              printf("line %d: maximum number of generated registers (%d) reached\n", node->name.line, (int)ARRAY_LENGTH(node->gen_regs));
+              exit(1);
+            }
+
+            node->gen_regs[node->num_gen_regs++] = param;
+
+            if (token_cmp_string(param, "dest")) {
+              node->gen_dest = true;
+            }
+          }
+
+          inst->params[inst->num_params++] = param;
+          break;
+
+        case TOK_STRING:
+        case TOK_INT_LITERAL:
+          inst->params[inst->num_params++] = param;
+          break;
+      }
+    }
+
+    expect(l, ')', "no closing ')'");
+
+    inst_tail = inst_tail->next = inst;
+  }
+
+  expect(l, '>', "no closing '>'");
   expect(l, ';', "terminate a node with a ';'");
+
+  node->inst_head = inst_head.next;
 
   return node;
 }
@@ -995,6 +1091,47 @@ int main(int argc, char** argv) {
     }
 
     fprintf(file, "  return node;\n");
+
+    fprintf(file, "}\n\n");
+
+    fprintf(file, "static reg_t gen_X64_");
+    print_token_uppercase(file, node->name);
+    fprintf(file, "(gen_context_t* g, cb_node_t* node) {\n");
+    fprintf(file, "  (void)g;\n");
+    fprintf(file, "  (void)node;\n");
+
+    for (int i = 0; i < node->num_gen_regs; ++i) {
+      fprintf(file, "  reg_t %.*s = new_reg(g);\n", node->gen_regs[i].length, node->gen_regs[i].start);
+    }
+
+    foreach_list(node_inst_t, inst, node->inst_head) {
+      fprintf(file, "  vec_put(g->mb->code, inst_%.*s(g", inst->name.length, inst->name.start);
+
+      for (int i = 0; i < inst->num_params; ++i) {
+        fprintf(file, ", ");
+
+        token_t param = inst->params[i];
+
+        switch (param.kind) {
+          default:
+            assert(false);
+            break;
+          case TOK_INT_LITERAL:
+            fprintf(file, "GET_REG(%.*s)", param.length, param.start);
+            break; 
+          case TOK_STRING:
+            fprintf(file, "%.*s", param.length-2, param.start+1);
+            break;
+          case TOK_IDENT:
+            fprintf(file, "%.*s", param.length, param.start);
+            break;
+        }
+      }
+
+      fprintf(file, "));\n");
+    }
+
+    fprintf(file, "  return %s;\n", node->gen_dest ? "dest" : "NULL_REG");
 
     fprintf(file, "}\n\n");
   }
