@@ -39,7 +39,7 @@ static char* pr_names32[NUM_PRS] = {
 };
 
 typedef struct {
-  int dummy;
+  int id;
 } alloca_t;
 
 #define INST_MAX_READS 4
@@ -308,7 +308,17 @@ static char* format_reg32(arena_t* arena, reg_t reg) {
   }
 }
 
+static char* format_alloca(arena_t* arena, alloca_t* a) {
+  return format_string(arena, "STACK%d", a->id);
+}
+
+#define R32(r) format_reg32(scratch.arena, r)
+#define ALLOCA(a) format_alloca(scratch.arena, a)
+
 #include "x64_isa.h"
+
+#undef R32
+#undef ALLOCA
 
 cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
   scratch_t scratch = scratch_get(1, &arena);
@@ -466,17 +476,17 @@ static reg_t gen_X64_MOV32_RI(gen_context_t* g, cb_node_t* node) {
 
 static reg_t gen_X64_MOV32_RM(gen_context_t* g, cb_node_t* node) {
   reg_t dest = new_reg(g);
-  vec_put(g->mb->code, inst_mov32_rm(g, dest, g->alloca_map[IN(2)]));
+  vec_put(g->mb->code, inst_mov32_rm(g, dest, g->alloca_map[node->ins[2]->id]));
   return dest;
 }
 
 static reg_t gen_X64_MOV32_MR(gen_context_t* g, cb_node_t* node) {
-  vec_put(g->mb->code, inst_mov32_mr(g, IN(3), g->alloca_map[IN(2)]));
+  vec_put(g->mb->code, inst_mov32_mr(g, IN(3), g->alloca_map[node->ins[2]->id]));
   return NULL_REG;
 }
 
 static reg_t gen_X64_MOV32_MI(gen_context_t* g, cb_node_t* node) {
-  vec_put(g->mb->code, inst_mov32_mi(g, g->alloca_map[IN(2)], *DATA(node, uint32_t)));
+  vec_put(g->mb->code, inst_mov32_mi(g, g->alloca_map[node->ins[2]->id], *DATA(node, uint32_t)));
   return NULL_REG;
 }
 
@@ -580,6 +590,8 @@ void cb_generate_x64(cb_func_t* func) {
   int phi_count = 0;
   cb_node_t** phis = arena_array(scratch.arena, cb_node_t*, func->next_id);
 
+  int next_alloca_id = 0;
+
   while (vec_len(stack)) { // generate the blocks in order specified by dominator tree -> defs dominate their uses except for phis
     machine_block_t* mb = vec_pop(stack);
     cb_block_t* b = mb->b;
@@ -607,7 +619,9 @@ void cb_generate_x64(cb_func_t* func) {
           break;
 
         case CB_NODE_ALLOCA: {
-          alloca_map[node->id] = arena_type(scratch.arena, alloca_t);
+          alloca_t* a = arena_type(scratch.arena, alloca_t);
+          a->id = next_alloca_id++;
+          alloca_map[node->id] = a;
         } break;
 
         case CB_NODE_PHI: {

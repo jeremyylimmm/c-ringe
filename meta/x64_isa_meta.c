@@ -321,11 +321,11 @@ static void parse_rule(lexer_t* l) {
 }
 
 static bool reached_directive(lexer_t* l, const char* name) {
-  if (peek(l).kind != TOK_DIRECTIVE) {
+  token_t t = peek(l);
+
+  if (t.kind != TOK_DIRECTIVE) {
     return false;
   }
-
-  token_t t = peek(l);
 
   return t.length == strlen(name) + 1 && memcmp(t.start+1, name, t.length-1) == 0;
 }
@@ -428,6 +428,13 @@ static inst_t* parse_isa(const char* pats_path) {
   while (peek(&l).kind != TOK_DIRECTIVE) {
     inst_tail = inst_tail->next = parse_instruction(&l);
   }
+
+  if (!reached_directive(&l, "nodes")) {
+    printf("error on line %d: expected '#nodes'\n", peek(&l).line);
+    exit(1);
+  }
+
+  lex(&l);
 
   if (!reached_directive(&l, "patterns")) {
     printf("error on line %d: expected '#patterns'\n", peek(&l).line);
@@ -766,36 +773,6 @@ int main(int argc, char** argv) {
       switch (c) {
         default: {
           fprintf(file, "%c", c);
-        } break;
-
-        case '%': {
-          int start = i;
-          while (i < ps.length && isdigit(ps.start[i])) {
-            i++;
-          }
-
-          int value = parse_int_literal(ps.start+start, i-start);
-
-          if (value >= ARRAY_LENGTH(regs)) {
-            printf("line %d: print string contains format specified '%%%d' is over the maximum of %d\n", ps.line, value, (int)ARRAY_LENGTH(regs));
-            exit(1);
-          }
-
-          fprintf(file, "%%s");
-
-          int code = regs[value];
-
-          char* member = NULL;
-          if (code >> 16 == 'r') {
-            member = "reads";
-          }
-          else {
-            member = "writes";
-          }
-
-          int member_index = code & 0xffff;
-          
-          ADD_PARAM("format_reg32(scratch.arena, inst->%s[%d])", member, member_index);
         } break;
 
         case '{': {

@@ -1,28 +1,30 @@
 #instructions
 
-0 = add32_rr 0, 1; "add %0, %1"
-0 = sub32_rr 0, 1; "sub %0, %1"
-0 = mul32_rr 0, 1; "mul %0, %1"
+0 = add32_rr 0, 1; "add {R32(inst->reads[0]):s}, {R32(inst->reads[1]):s}"
+0 = sub32_rr 0, 1; "sub {R32(inst->reads[0]):s}, {R32(inst->reads[1]):s}"
+0 = mul32_rr 0, 1; "mul {R32(inst->reads[0]):s}, {R32(inst->reads[1]):s}"
 
 edx, eax = cdq eax; "cdq"
-eax = idiv_r 0, edx, eax; "idiv %0"
+eax = idiv_r 0, edx, eax; "idiv {R32(inst->reads[0]):s}"
 
-0 = add32_ri 0, "(uint64_t)x" : "uint32_t x"; "add %0, {(uint32_t)inst->data:u}"
-0 = kill32; "kill32 %0"
+0 = add32_ri 0, "(uint64_t)x" : "uint32_t x"; "add {R32(inst->reads[0]):s}, {(uint32_t)inst->data:u}"
+0 = kill32; "kill32 {R32(inst->writes[0]):s}"
 
-0 = mov32_ri "(uint64_t)x" : "uint32_t x"; "mov %0, {(uint32_t)inst->data:u}"
-0 = mov32_rm "(uint64_t)loc" : "alloca_t* loc"; "mov %0, [bruh]"
+0 = mov32_ri "(uint64_t)x" : "uint32_t x"; "mov {R32(inst->writes[0]):s}, {(uint32_t)inst->data:u}"
+0 = mov32_rm "(uint64_t)loc" : "alloca_t* loc"; "mov {R32(inst->writes[0]):s}, [{ALLOCA((alloca_t*)inst->data):s}]"
 
-0 = mov32_rr 1; "mov %0, %1"
+0 = mov32_rr 1; "mov {R32(inst->writes[0]):s}, {R32(inst->reads[0]):s}"
 
-_ = mov32_mr "(uint64_t)loc", 0 : "alloca_t* loc"; "mov [bruh], %0"
-_ = mov32_mi "make_mov32_mi_data(g, loc, i)" : "alloca_t* loc", "uint32_t i"; "mov [bruh], {((mov32_mi_data_t*)inst->data)->i:u}"
+_ = mov32_mr "(uint64_t)loc", 0 : "alloca_t* loc"; "mov [{ALLOCA((alloca_t*)inst->data):s}], {R32(inst->reads[0]):s}"
+_ = mov32_mi "make_mov32_mi_data(g, loc, i)" : "alloca_t* loc", "uint32_t i"; "mov [{ALLOCA(((mov32_mi_data_t*)inst->data)->loc):s}], {((mov32_mi_data_t*)inst->data)->i:u}"
 
 _ = ret; "ret"
 
-_ = test32 0, 1; "test %0, %1"
+_ = test32 0, 1; "test {R32(inst->reads[0]):s}, {R32(inst->reads[1]):s}"
 _ = jz "(uint64_t)loc" : "machine_block_t* loc"; "jz bb_{((machine_block_t*)inst->data)->id:u}"
 _ = jmp "(uint64_t)loc" : "machine_block_t* loc"; "jmp bb_{((machine_block_t*)inst->data)->id:u}"
+
+#nodes
 
 #patterns
 
