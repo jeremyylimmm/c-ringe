@@ -24,7 +24,33 @@ _ = test32 0, 1; "test {R32(inst->reads[0]):s}, {R32(inst->reads[1]):s}"
 _ = jz "(uint64_t)loc" : "machine_block_t* loc"; "jz bb_{((machine_block_t*)inst->data)->id:u}"
 _ = jmp "(uint64_t)loc" : "machine_block_t* loc"; "jmp bb_{((machine_block_t*)inst->data)->id:u}"
 
+
+
+
+
 #nodes
+
+add32_rr(left, right);
+sub32_rr(left, right);
+mul32_rr(left, right);
+idiv32_rr(left, right);
+
+kill32();
+
+mov32_ri() {"uint32_t", "value"} : "uint32_t value";
+add32_ri(left) {"uint32_t", "right"} : "uint32_t right";
+mov32_mr(ctrl, mem, address, value) (is_pinned, produces_memory);
+mov32_mi(ctrl, mem, address) {"uint32_t", "value"} : "uint32_t value" (is_pinned, produces_memory);
+
+mov32_rm(ctrl, mem, address) (reads_memory);
+
+end32(ctrl, mem, value) (is_cfg, is_pinned);
+
+branch32(ctrl, predicate) (is_cfg, is_pinned);
+
+
+
+
 
 #patterns
 

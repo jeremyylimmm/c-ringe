@@ -14,13 +14,13 @@ typedef enum {
   NODE_CODE_LITERAL,
 } node_kind_t;
 
-typedef struct node_t node_t;
-struct node_t {
+typedef struct pat_node_t pat_node_t;
+struct pat_node_t {
   node_kind_t kind;
   int subtree_count;
   const char* name;
   int arity;
-  node_t** children;
+  pat_node_t** children;
   char* binding;
 };
 
@@ -28,8 +28,8 @@ typedef struct rule_t rule_t;
 struct rule_t {
   rule_t* next;
   int id;
-  node_t* in;
-  node_t* out;
+  pat_node_t* in;
+  pat_node_t* out;
 };
 
 enum {
@@ -75,6 +75,24 @@ struct inst_t {
   token_t params[8];
 
   token_t print_string;
+};
+
+typedef struct node_t node_t;
+struct node_t {
+  node_t* next;
+
+  token_t name;
+
+  int num_inputs;
+  token_t inputs[8];
+
+  token_t data_type;
+  token_t data_value;
+
+  token_t param;
+
+  int num_flags;
+  token_t flags[8];
 };
 
 static op_entry_t table[TABLE_CAPACITY];
@@ -231,7 +249,7 @@ static token_t expect(lexer_t* l, int kind, const char* message) {
   return tok;
 }
 
-static node_t* parse_node(lexer_t* l, op_entry_t** out_entry, bool is_in) {
+static pat_node_t* parse_pat_node(lexer_t* l, op_entry_t** out_entry, bool is_in) {
   if (peek(l).kind == TOK_STRING && !is_in) {
     token_t str = lex(l);
 
@@ -239,7 +257,7 @@ static node_t* parse_node(lexer_t* l, op_entry_t** out_entry, bool is_in) {
     memcpy(buf, str.start+1, (str.length-2) * sizeof(char));
     buf[str.length-2] = '\0';
     
-    node_t* node = calloc(1, sizeof(node));
+    pat_node_t* node = calloc(1, sizeof(node));
     node->kind = NODE_CODE_LITERAL;
     node->name = buf;
 
@@ -256,7 +274,7 @@ static node_t* parse_node(lexer_t* l, op_entry_t** out_entry, bool is_in) {
   }
 
   int arity = 0;
-  node_t* children[MAX_ARITY];
+  pat_node_t* children[MAX_ARITY];
 
   node_kind_t kind = NODE_LEAF;
 
@@ -275,7 +293,7 @@ static node_t* parse_node(lexer_t* l, op_entry_t** out_entry, bool is_in) {
       }
 
       assert(arity < MAX_ARITY);
-      children[arity++] = parse_node(l, NULL, is_in);
+      children[arity++] = parse_pat_node(l, NULL, is_in);
     }
 
     expect(l, ')', "expected ')'");
@@ -283,14 +301,14 @@ static node_t* parse_node(lexer_t* l, op_entry_t** out_entry, bool is_in) {
 
   op_entry_t* entry = get_op_entry(op);
 
-  node_t* result = calloc(1, sizeof(node_t));
+  pat_node_t* result = calloc(1, sizeof(pat_node_t));
   result->kind = kind;
   result->name = entry->name;
   result->arity = arity;
   result->subtree_count = result->kind == NODE_SUBTREE ? 1 : 0;
   result->binding = binding;
 
-  result->children = calloc(1, arity * sizeof(node_t*));
+  result->children = calloc(1, arity * sizeof(pat_node_t*));
 
   for (int i = 0; i < arity; ++i) {
     result->children[i] = children[i];
@@ -306,10 +324,10 @@ static node_t* parse_node(lexer_t* l, op_entry_t** out_entry, bool is_in) {
 
 static void parse_rule(lexer_t* l) {
   op_entry_t* in_entry = NULL;
-  node_t* in = parse_node(l, &in_entry, true);
+  pat_node_t* in = parse_pat_node(l, &in_entry, true);
 
   expect(l, TOK_ARROW, "expected '->' between input and output pattern");
-  node_t* out = parse_node(l, NULL, false);
+  pat_node_t* out = parse_pat_node(l, NULL, false);
 
   rule_t* rule = calloc(1, sizeof(rule_t));
   rule->id = in_entry->rule_count++;
@@ -407,7 +425,72 @@ static inst_t* parse_instruction(lexer_t* l) {
   return inst;
 }
 
-static inst_t* parse_isa(const char* pats_path) {
+static node_t* parse_node(lexer_t* l) {
+  node_t* node = calloc(1, sizeof(node_t));
+
+  node->name = expect(l, TOK_IDENT, "expected a node name");
+  expect(l, '(', "expected '()' param list");
+
+  while (peek(l).kind != ')' && peek(l).kind != TOK_EOF) {
+    if (node->num_inputs == ARRAY_LENGTH(node->inputs)) {
+      printf("line %d: node inputs reached maximum (%d)\n", node->name.line, (int)ARRAY_LENGTH(node->inputs));
+      exit(1);
+    }
+
+    if (node->num_inputs > 0) {
+      expect(l, ',', "separate node inputs with ','");
+    }
+
+    node->inputs[node->num_inputs++] = expect(l, TOK_IDENT, "a node input must be an identifier");
+  }
+
+  expect(l, ')', "expected ')'");
+
+  if (peek(l).kind == '{') {
+    lex(l);
+
+    node->data_type = expect(l, TOK_STRING, "expected a node data specifier type (as a string)");
+    expect(l, ',', "separate node data specifier type and value with a ','");
+    node->data_value = expect(l, TOK_STRING, "expected a node data specifier value (as a string)");
+
+    expect(l, '}', "no closing '}' for node data specifier");
+  }
+
+  if (peek(l).kind == ':') {
+    lex(l);
+    node->param = expect(l, TOK_STRING, "expected a parameter string");
+  }
+
+  if (peek(l).kind == '(') {
+    lex(l);
+
+    while (peek(l).kind != ')' && peek(l).kind != TOK_EOF) {
+      if (node->num_flags == ARRAY_LENGTH(node->flags)) {
+        printf("line %d: node flag maximum (%d) reached\n", node->name.line, (int)ARRAY_LENGTH(node->flags));
+        exit(1);
+      }
+
+      if (node->num_flags > 0) {
+        expect(l, ',', "separate node flags with ','");
+      }
+
+      node->flags[node->num_flags++] = expect(l, TOK_IDENT, "expected a node flag (as an identifier)");
+    }
+
+    expect(l, ')', "no closing ')' for node flag list");
+  }
+
+  expect(l, ';', "terminate a node with a ';'");
+
+  return node;
+}
+
+typedef struct {
+  node_t* node_head;
+  inst_t* inst_head;
+} isa_t;
+
+static isa_t parse_isa(const char* pats_path) {
   char* isa = load_isa(pats_path);
 
   lexer_t l = {
@@ -436,6 +519,13 @@ static inst_t* parse_isa(const char* pats_path) {
 
   lex(&l);
 
+  node_t node_head = {0};
+  node_t* node_tail = &node_head;
+
+  while (peek(&l).kind != TOK_DIRECTIVE) {
+    node_tail = node_tail->next = parse_node(&l);
+  }
+
   if (!reached_directive(&l, "patterns")) {
     printf("error on line %d: expected '#patterns'\n", peek(&l).line);
     exit(1);
@@ -447,10 +537,13 @@ static inst_t* parse_isa(const char* pats_path) {
     parse_rule(&l);
   }
 
-  return inst_head.next;
+  return (isa_t) {
+    .inst_head = inst_head.next,
+    .node_head = node_head.next
+  };
 }
 
-static void write_node_match(FILE* file, const char* c_value, node_t* node, bool is_root) {
+static void write_node_match(FILE* file, const char* c_value, pat_node_t* node, bool is_root) {
   switch (node->kind) {
     case NODE_CODE_LITERAL:
       assert(false);
@@ -486,7 +579,7 @@ static void write_node_match(FILE* file, const char* c_value, node_t* node, bool
   fprintf(file, ")");
 }
 
-static void write_leaves(FILE* file, node_t* in, char* c_value, bool push) {
+static void write_leaves(FILE* file, pat_node_t* in, char* c_value, bool push) {
   if (!push) {
     if (in->binding) {
       fprintf(file, "      cb_node_t* %s = %s;\n", in->binding, c_value);
@@ -494,7 +587,7 @@ static void write_leaves(FILE* file, node_t* in, char* c_value, bool push) {
   }
 
   for (int i = 0; i < in->arity; ++i) {
-    node_t* child = in->children[i];
+    pat_node_t* child = in->children[i];
 
     switch (child->kind) {
       default:
@@ -519,7 +612,7 @@ static void write_leaves(FILE* file, node_t* in, char* c_value, bool push) {
   }
 }
 
-static void write_node_input_name(FILE* file, int* ids, node_t* node, int index) {
+static void write_node_input_name(FILE* file, int* ids, pat_node_t* node, int index) {
   switch (node->children[index]->kind) {
     default:
       fprintf(file, "n%d", ids[index]);
@@ -533,20 +626,20 @@ static void write_node_input_name(FILE* file, int* ids, node_t* node, int index)
   }
 }
 
-static int write_node_creation(FILE* file, node_t* node, int* id) {
+static int write_node_creation(FILE* file, pat_node_t* node, int* id) {
   int my_id = (*id)++;
 
   int ids[MAX_ARITY];
 
   for (int i = 0; i < node->arity; ++i) {
-    node_t* child = node->children[i];
+    pat_node_t* child = node->children[i];
 
     if (child->kind == NODE_SUBTREE) {
       ids[i] = write_node_creation(file, child, id);
     }
   }
 
-  fprintf(file, "      cb_node_t* n%d = targ_node_%s(s", my_id, node->name);
+  fprintf(file, "      cb_node_t* n%d = target_node_%s(s", my_id, node->name);
 
   for (int i = 0; i < node->arity; ++i) {
     fprintf(file, ", ");
@@ -643,19 +736,20 @@ static void record_reg_read_or_write(int* inputs, int inputs_capacity, token_t t
 }
 
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    printf("Usage: %s <pats> <dfa>\n", argv[0]);
+  if (argc != 4) {
+    printf("Usage: %s <isa_in> <isa_out> <node_kind_out>\n", argv[0]);
     return 1;
   }
 
-  const char* pats_path = argv[1];
-  const char* dfa_path = argv[2];
+  const char* isa_in_path = argv[1];
+  const char* isa_out_path = argv[2];
+  const char* node_kind_out_path = argv[3];
 
-  inst_t* inst_head = parse_isa(pats_path);
+  isa_t isa = parse_isa(isa_in_path);
 
   FILE* file;
-  if(fopen_s(&file, dfa_path, "w")) {
-    printf("Failed to write '%s'\n", dfa_path);
+  if(fopen_s(&file, isa_out_path, "w")) {
+    printf("Failed to write '%s'\n", isa_out_path);
     return 1;
   }
 
@@ -665,7 +759,7 @@ int main(int argc, char** argv) {
   fprintf(file, "enum {\n");
   fprintf(file, "  X64_INST_UNINITIALIZED,\n");
 
-  foreach_list(inst_t, inst, inst_head) {
+  foreach_list(inst_t, inst, isa.inst_head) {
     fprintf(file, "  X64_INST_");
 
     for (int i = 0; i < inst->name.length; ++i) {
@@ -677,7 +771,7 @@ int main(int argc, char** argv) {
 
   fprintf(file, "};\n\n");
 
-  foreach_list(inst_t, inst, inst_head) {
+  foreach_list(inst_t, inst, isa.inst_head) {
     int regs[8] = {0};
 
     {
@@ -835,7 +929,7 @@ int main(int argc, char** argv) {
   fprintf(file, "  switch (inst->op) {\n");
   fprintf(file, "    default: assert(false); break;\n");
 
-  foreach_list (inst_t, inst, inst_head) {
+  foreach_list (inst_t, inst, isa.inst_head) {
     fprintf(file, "    case X64_INST_");
     print_token_uppercase(file, inst->name);
     fprintf(file, ": print_inst_%.*s(file, inst); break;\n", inst->name.length, inst->name.start);
@@ -846,6 +940,64 @@ int main(int argc, char** argv) {
   fprintf(file, "}\n\n");
 
   fprintf(file, "#define IN(node, input) (assert(input < (node->num_ins)), node->ins[input])\n\n");
+
+  foreach_list (node_t, node, isa.node_head) {
+    fprintf(file, "static cb_node_t* target_node_%.*s(sel_context_t* s", node->name.length, node->name.start);
+
+    for (int i = 0; i < node->num_inputs; ++i) {
+      fprintf(file, ", cb_node_t* %.*s", node->inputs[i].length, node->inputs[i].start);
+    }
+
+    if (node->param.start) {
+      fprintf(file, ", %.*s", node->param.length-2, node->param.start+1);
+    }
+
+    fprintf(file, ") {\n");
+
+    fprintf(file, "  cb_node_t* node = %s(s->new_func, CB_NODE_X64_", node->num_inputs > 0 ? "new_node" : "new_leaf");
+    print_token_uppercase(file, node->name);
+
+    if (node->num_inputs > 0) {
+      fprintf(file, ", %d", node->num_inputs);
+    }
+
+    if (node->data_type.start) {
+      fprintf(file, ", sizeof(%.*s)", node->data_type.length-2, node->data_type.start+1);
+    }
+    else {
+      fprintf(file, ", 0");
+    }
+
+    if (node->num_flags > 0) {
+      fprintf(file, ", ");
+
+      for (int i = 0; i < node->num_flags; ++i) {
+        if (i > 0) {
+          fprintf(file, " | ");
+        }
+
+        fprintf(file, "CB_NODE_FLAG_");
+        print_token_uppercase(file, node->flags[i]);
+      }
+    }
+    else {
+      fprintf(file, ", CB_NODE_FLAG_NONE");
+    }
+
+    fprintf(file, ");\n");
+
+    for (int i = 0; i < node->num_inputs; ++i) {
+      fprintf(file, "  set_input(s->new_func, node, %.*s, %d);\n", node->inputs[i].length, node->inputs[i].start, i);
+    }
+
+    if (node->data_type.start) {
+      fprintf(file, "  *DATA(node, %.*s) = %.*s;\n", node->data_type.length-2, node->data_type.start+1, node->data_value.length-2, node->data_value.start+1);
+    }
+
+    fprintf(file, "  return node;\n");
+
+    fprintf(file, "}\n\n");
+  }
 
   for (int i = 0; i < TABLE_CAPACITY; ++i) {
     op_entry_t* e = table + i;
@@ -930,6 +1082,19 @@ int main(int argc, char** argv) {
   }
 
   fprintf(file, "#undef IN\n\n");
+
+  fclose(file);
+
+  if (fopen_s(&file, node_kind_out_path, "w")) {
+    printf("Failed to write '%s'\n", node_kind_out_path);
+    exit(1);
+  }
+
+  foreach_list (node_t, node, isa.node_head) {
+    fprintf(file, "X(X64_");
+    print_token_uppercase(file, node->name);
+    fprintf(file, ", \"x64_%.*s\")\n", node->name.length, node->name.start);
+  }
 
   fclose(file);
 
