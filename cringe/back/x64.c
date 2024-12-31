@@ -376,6 +376,66 @@ static void insert_before_n(machine_block_t* mb, machine_inst_t inst, int n) {
   mb->code[i] = inst;
 }
 
+static uint64_t** compute_live_out(arena_t* arena, int block_count, machine_block_t* block_head, reg_t next_reg) {
+  scratch_t scratch = scratch_get(1, &arena); 
+
+  uint64_t** ue_var   = arena_array(scratch.arena, uint64_t*, block_count);
+  uint64_t** var_kill = arena_array(scratch.arena, uint64_t*, block_count);
+  uint64_t** live_out = arena_array(arena, uint64_t*, block_count);
+
+  foreach_list(machine_block_t, mb, block_head) {
+    ue_var[mb->id]   = bitset_alloc(scratch.arena, next_reg);
+    var_kill[mb->id] = bitset_alloc(scratch.arena, next_reg);
+    live_out[mb->id] = bitset_alloc(arena, next_reg);
+
+    for (int i = 0; i < vec_len(mb->code); ++i) {
+      machine_inst_t* inst = mb->code + i;
+
+      for (int j = 0; j < inst->num_reads; ++j) {
+        reg_t y = inst->reads[j];
+
+        if (!bitset_get(var_kill[mb->id], y)) {
+          bitset_set(ue_var[mb->id], y);
+        }
+      }
+
+      for (int j = 0; j < inst->num_writes; ++j) {
+        reg_t x = inst->writes[j];
+        bitset_set(var_kill[mb->id], x);
+      }
+    }
+  }
+
+  size_t num_words = bitset_u64_count(block_count);
+
+  for (;;) {
+    bool changed = false;
+
+    foreach_list(machine_block_t, n, block_head) {
+      for (int s = 0; s < n->successor_count; ++s) {
+        machine_block_t* m = n->successors[s];
+
+        for (int i = 0; i < num_words; ++i) {
+          uint64_t result = ue_var[m->id][i] | (live_out[m->id][i] & ~(var_kill[m->id][i]));
+
+          if ((live_out[n->id][i] | result) != live_out[n->id][i]) {
+            live_out[n->id][i] |= result;
+            changed = true;
+          }
+        }
+      }
+    }
+
+    if (!changed) {
+      break;
+    }
+  }
+
+  scratch_release(&scratch);
+
+  return live_out;
+}
+
 void cb_generate_x64(cb_func_t* func) {
   scratch_t scratch = scratch_get(0, NULL);  
 
@@ -507,8 +567,19 @@ void cb_generate_x64(cb_func_t* func) {
     prepend(mb, inst_mov32_rr(&g, reg_map[phi->id], temp));
   }
 
+  uint64_t** live_out = compute_live_out(scratch.arena, gcm.block_count, block_head.next, g.next_reg);
+
   foreach_list(machine_block_t, mb, block_head.next) {
     printf("bb_%d:\n", mb->id);
+
+    printf("  ~~~~~ live out ~~~~~\n");
+    for (reg_t i = 0; i < g.next_reg; ++i) {
+      if (bitset_get(live_out[mb->id], i)) {
+        printf("    %%%u\n", i);
+      }
+    }
+    printf("  ~~~~~~~~~~~~~~~~~~~~\n");
+
     for (int i = 0; i < vec_len(mb->code); ++i) {
       machine_inst_t* inst = mb->code + i; 
 
