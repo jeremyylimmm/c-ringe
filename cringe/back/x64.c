@@ -436,6 +436,350 @@ static uint64_t** compute_live_out(arena_t* arena, int block_count, machine_bloc
   return live_out;
 }
 
+typedef struct {
+  int count;
+  reg_t* dense;
+  int* sparse;
+} live_now_t;
+
+static void live_now_add(live_now_t* live_now, reg_t r) {
+  if (live_now->sparse[r] != -1) {
+    return;
+  }
+
+  int index = live_now->count++;
+  live_now->dense[index] = r;
+  live_now->sparse[r] = index;
+}
+
+static void live_now_remove(live_now_t* live_now, reg_t r) {
+  int index = live_now->sparse[r];
+
+  if (index == -1) {
+    return;
+  }
+
+  assert(live_now->dense[index] == r);
+
+  reg_t last = live_now->dense[index] = live_now->dense[--live_now->count];
+  live_now->sparse[last] = index;
+  live_now->sparse[r] = -1;
+}
+
+static void live_now_clear(live_now_t* live_now) {
+  while (live_now->count) {
+    reg_t r = live_now->dense[--live_now->count];
+    live_now->sparse[r] = -1;
+  }
+}
+
+static size_t lo_tri_bitset_index(reg_t next_reg) {
+  return (next_reg * (next_reg+1))/2;
+}
+
+static size_t intf_matrix_index(reg_t x, reg_t y) {
+  if (x > y) {
+    reg_t temp = x;
+    x = y;
+    y = temp;
+  }
+
+  return lo_tri_bitset_index(y) + x;
+}
+
+static bool intf_matrix_get(uint64_t* intf_matrix, reg_t x, reg_t y) {
+  return bitset_get(intf_matrix, intf_matrix_index(x, y));
+}
+
+static void intf_matrix_set(uint64_t* intf_matrix, reg_t x, reg_t y) {
+  bitset_set(intf_matrix, intf_matrix_index(x, y));
+}
+
+typedef struct {
+  reg_t next_reg;
+  uint64_t* matrix;
+  vec_t(reg_t)* adj;
+  vec_t(machine_inst_t*) copies;
+} intf_t;
+
+static intf_t init_intf(arena_t* arena, reg_t next_reg) {
+  return (intf_t) {
+    .matrix = bitset_alloc(arena, lo_tri_bitset_index(next_reg)),
+    .adj = arena_array(arena, vec_t(reg_t), next_reg),
+  };
+}
+
+static void free_intf(intf_t* intf) {
+  for (reg_t i = 0; i < intf->next_reg; ++i) {
+    vec_free(intf->adj[i]);
+  }
+
+  vec_free(intf->copies);
+}
+
+static void build_intf(intf_t* intf, machine_block_t* block_head, uint64_t** live_out, reg_t next_reg) {
+  scratch_t scratch = scratch_get(0, NULL);
+
+  live_now_t live_now = {
+    .dense = arena_array(scratch.arena, reg_t, next_reg),
+    .sparse = arena_array(scratch.arena, int, next_reg),
+  };
+
+  for (reg_t r = 0; r < next_reg; ++r) {
+    live_now.sparse[r] = -1;
+    vec_clear(intf->adj[r]);
+  }
+
+  vec_clear(intf->copies);
+
+  bitset_clear(intf->matrix, lo_tri_bitset_index(next_reg));
+
+  foreach_list(machine_block_t, mb, block_head) {
+    assert(live_now.count == 0);
+
+    for (reg_t r = 0; r < next_reg; ++r) {
+      if (bitset_get(live_out[mb->id], r)) {
+        live_now_add(&live_now, r);
+      }
+    }
+
+    for (int i = (int)vec_len(mb->code)-1; i >= 0; --i) {
+      machine_inst_t* inst = mb->code + i;
+
+      for (int j = 0; j < inst->num_writes; ++j) {
+        reg_t x = inst->writes[j];
+
+        for (int k = 0; k < live_now.count; ++k) {
+          reg_t y = live_now.dense[k];
+
+          if (x == y) {
+            continue;
+          }
+
+          if (!intf_matrix_get(intf->matrix, x, y)) {
+            intf_matrix_set(intf->matrix, x, y);
+            vec_put(intf->adj[x], y);
+            vec_put(intf->adj[y], x);
+          }
+        }
+      }
+
+      for (int j = 0; j < inst->num_writes; ++j) {
+        reg_t x = inst->writes[j];
+        live_now_remove(&live_now, x);
+      }
+
+      for (int j = 0; j < inst->num_reads; ++j) {
+        reg_t x = inst->reads[j];
+        live_now_add(&live_now, x);
+      }
+
+      if (inst->op == X64_INST_MOV32_RR) {
+        vec_put(intf->copies, inst);
+      }
+    }
+
+    live_now_clear(&live_now);
+  }
+}
+
+static reg_t get_coalesced(reg_t* coalesced_map, reg_t x) {
+  reg_t og = x;
+
+  while (coalesced_map[x] != x) {
+    x = coalesced_map[x];
+  }
+
+  coalesced_map[og] = x;
+
+  return x;
+}
+
+static void regalloc(machine_block_t* block_head, int block_count, reg_t next_reg) { 
+  scratch_t scratch = scratch_get(0, NULL);
+
+  uint64_t** live_out = compute_live_out(scratch.arena, block_count, block_head, next_reg);
+
+  intf_t intf = init_intf(scratch.arena, next_reg);
+  reg_t* coalesce_map = arena_array(scratch.arena, reg_t, next_reg);
+
+  for (reg_t r = 0; r < next_reg; ++r) {
+    coalesce_map[r] = r;
+  }
+
+  for (;;) {
+    build_intf(&intf, block_head, live_out, next_reg);
+
+    bool any_coalesced = false;
+
+    for (int i = 0; i < vec_len(intf.copies); ++i) {
+      machine_inst_t* copy = intf.copies[i];
+
+      reg_t dest = get_coalesced(coalesce_map, copy->writes[0]);
+      reg_t src = get_coalesced(coalesce_map, copy->reads[0]);
+
+      if (dest < FIRST_VR || src < FIRST_VR) {
+        continue;
+      }
+
+      if (!intf_matrix_get(intf.matrix, dest, src)) {
+        coalesce_map[dest] = src;
+
+        printf("Coalescing %u -> %u\n", dest, src);
+
+        for (int j = 0; j < vec_len(intf.adj[dest]); ++j) {
+          reg_t y = intf.adj[dest][j];
+          intf_matrix_set(intf.matrix, src, y);
+          vec_put(intf.adj[src], y);
+          vec_put(intf.adj[y], src);
+        }
+
+        any_coalesced = true;
+      }
+    }
+
+    if (!any_coalesced) {
+      break;
+    }
+
+    // rewrite code to use coalesced registers
+
+    foreach_list(machine_block_t, mb, block_head) {
+      int lo = 0;
+      int hi = 0;
+
+      for (; hi < vec_len(mb->code); ++hi) {
+        machine_inst_t* inst = mb->code + hi;
+
+        for (int j = 0; j < inst->num_writes; ++j) {
+          inst->writes[j] = get_coalesced(coalesce_map, inst->writes[j]);
+        }
+
+        for (int j = 0; j < inst->num_reads; ++j) {
+          inst->reads[j] = get_coalesced(coalesce_map, inst->reads[j]);
+        }
+
+        bool needs_removal = false;
+
+        if (inst->op == X64_INST_MOV32_RR) {
+          if (inst->reads[0] == inst->writes[0]) {
+            needs_removal = true;
+          }
+        }
+
+        if (!needs_removal) {
+          mb->code[lo++] = *inst;
+        }
+      }
+
+      while (lo < vec_len(mb->code)) {
+        vec_pop(mb->code);
+      }
+    }
+  }
+
+  int* degree = arena_array(scratch.arena, int, next_reg);
+
+  int simplify_left_count = 0;
+  reg_t* simplify_left = arena_array(scratch.arena, reg_t, next_reg);
+
+  for (reg_t r = 0; r < next_reg; ++r) {
+    simplify_left[simplify_left_count++] = r;
+    degree[r] = (int)vec_len(intf.adj[r]);
+  }
+
+  int stack_count = 0;
+  reg_t* stack = arena_array(scratch.arena, reg_t, next_reg);
+
+  while (simplify_left_count > 0) {
+    bool changed = false;
+
+    for (int i = simplify_left_count-1; i >= 0; --i) {
+      reg_t x = simplify_left[i];
+
+      if (degree[x] < NUM_PRS) {
+        simplify_left[i] = simplify_left[--simplify_left_count];
+        stack[stack_count++] = x;
+
+        for (int j = 0; j < vec_len(intf.adj[x]); ++j) {
+          reg_t y = intf.adj[x][j];
+          degree[y]--;
+        }
+
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      break;
+    }
+  }
+
+  assert(simplify_left_count == 0 && "graph not trivially colorable");
+
+  reg_t* map = arena_array(scratch.arena, reg_t, next_reg);
+
+  for (reg_t r = 0; r < next_reg; ++r) {
+    map[r] = NULL_REG;
+  }
+
+  uint64_t* taken = bitset_alloc(scratch.arena, NUM_PRS);
+
+  while (stack_count) {
+    reg_t x = stack[--stack_count];
+
+    bitset_clear(taken, NUM_PRS);
+
+    for (int i = 0; i < vec_len(intf.adj[x]); ++i) {
+      reg_t y = intf.adj[x][i];
+
+      if(map[y] != NULL_REG) {
+        bitset_set(taken, map[y]);
+      }
+    }
+
+    for (reg_t pr = 0; map[x] == NULL_REG && pr < NUM_PRS; ++pr) {
+      if (!bitset_get(taken, pr)) {
+        map[x] = pr;
+      }
+    }
+  }
+
+  foreach_list(machine_block_t, mb, block_head) {
+    for (int i = 0; i < vec_len(mb->code); ++i) {
+      machine_inst_t* inst = mb->code + i;
+
+      for (int j = 0; j < inst->num_writes; ++j) {
+        inst->writes[j] = map[inst->writes[j]];
+      }
+
+      for (int j = 0; j < inst->num_reads; ++j) {
+        inst->reads[j] = map[inst->reads[j]];
+      }
+    }
+  }
+
+  free_intf(&intf);
+
+  scratch_release(&scratch);
+}
+
+static void dump_func(machine_block_t* block_head) {
+  foreach_list(machine_block_t, mb, block_head) {
+    printf("bb_%d:\n", mb->id);
+
+    for (int i = 0; i < vec_len(mb->code); ++i) {
+      machine_inst_t* inst = mb->code + i; 
+
+      printf("  ");
+      print_inst(stdout, inst);
+      printf("\n");
+    }
+  }
+
+  printf("\n");
+}
+
 void cb_generate_x64(cb_func_t* func) {
   scratch_t scratch = scratch_get(0, NULL);  
 
@@ -567,27 +911,9 @@ void cb_generate_x64(cb_func_t* func) {
     prepend(mb, inst_mov32_rr(&g, reg_map[phi->id], temp));
   }
 
-  uint64_t** live_out = compute_live_out(scratch.arena, gcm.block_count, block_head.next, g.next_reg);
-
-  foreach_list(machine_block_t, mb, block_head.next) {
-    printf("bb_%d:\n", mb->id);
-
-    printf("  ~~~~~ live out ~~~~~\n");
-    for (reg_t i = 0; i < g.next_reg; ++i) {
-      if (bitset_get(live_out[mb->id], i)) {
-        printf("    %%%u\n", i);
-      }
-    }
-    printf("  ~~~~~~~~~~~~~~~~~~~~\n");
-
-    for (int i = 0; i < vec_len(mb->code); ++i) {
-      machine_inst_t* inst = mb->code + i; 
-
-      printf("  ");
-      print_inst(stdout, inst);
-      printf("\n");
-    }
-  }
+  dump_func(block_head.next);
+  regalloc(block_head.next, gcm.block_count, g.next_reg);
+  dump_func(block_head.next);
 
   vec_free(stack);
   scratch_release(&scratch);

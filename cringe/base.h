@@ -95,6 +95,10 @@ inline void bitset_clear(uint64_t* bs, size_t bit_count) {
   memset(bs, 0, bitset_u64_count(bit_count) * sizeof(uint64_t));
 }
 
+inline void bitset_copy(uint64_t* dest, uint64_t* src, size_t bit_count) {
+  memcpy(dest, src, bitset_u64_count(bit_count) * sizeof(uint64_t));
+}
+
 inline void bitset_or(uint64_t* target, uint64_t* source, size_t bit_count) {
   size_t c = bitset_u64_count(bit_count);
 
