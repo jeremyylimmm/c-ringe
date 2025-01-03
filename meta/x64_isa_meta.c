@@ -887,7 +887,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    fprintf(file, "static machine_inst_t inst_%.*s(gen_context_t* g", inst->name.length, inst->name.start);
+    fprintf(file, "static machine_inst_t inst_%.*s(arena_t* arena", inst->name.length, inst->name.start);
 
     bool has_gap = false;
 
@@ -911,7 +911,7 @@ int main(int argc, char** argv) {
 
     fprintf(file, ") {\n");
 
-    fprintf(file, "  (void)g;\n");
+    fprintf(file, "  (void)arena;\n");
 
     fprintf(file, "  return (machine_inst_t) {\n");
     fprintf(file, "    .op = X64_INST_");
@@ -1105,7 +1105,7 @@ int main(int argc, char** argv) {
     }
 
     foreach_list(node_inst_t, inst, node->inst_head) {
-      fprintf(file, "  vec_put(g->mb->code, inst_%.*s(g", inst->name.length, inst->name.start);
+      fprintf(file, "  vec_put(g->mb->code, inst_%.*s(g->arena", inst->name.length, inst->name.start);
 
       for (int i = 0; i < inst->num_params; ++i) {
         fprintf(file, ", ");

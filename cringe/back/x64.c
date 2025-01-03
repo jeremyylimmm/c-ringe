@@ -71,6 +71,8 @@ struct machine_block_t {
 
   machine_block_t* successors[2];
   machine_block_t** predecessors;
+
+  int loop_nesting;
 };
 
 typedef struct {
@@ -203,8 +205,8 @@ typedef struct {
   uint32_t i;
 } mov32_mi_data_t;
 
-static uint64_t make_mov32_mi_data(gen_context_t* g, alloca_t* loc, uint32_t i) {
-  mov32_mi_data_t* d = arena_type(g->arena, mov32_mi_data_t);
+static uint64_t make_mov32_mi_data(arena_t* arena, alloca_t* loc, uint32_t i) {
+  mov32_mi_data_t* d = arena_type(arena, mov32_mi_data_t);
   d->loc = loc;
   d->i = i;
   return (uint64_t)d;
@@ -498,6 +500,7 @@ static void intf_matrix_set(uint64_t* intf_matrix, reg_t x, reg_t y) {
 typedef struct {
   reg_t next_reg;
   uint64_t* matrix;
+  int* spill_cost;
   vec_t(reg_t)* adj;
   vec_t(machine_inst_t*) copies;
 } intf_t;
@@ -505,6 +508,7 @@ typedef struct {
 static intf_t init_intf(arena_t* arena, reg_t next_reg) {
   return (intf_t) {
     .matrix = bitset_alloc(arena, lo_tri_bitset_index(next_reg)),
+    .spill_cost = arena_array(arena, int, next_reg),
     .adj = arena_array(arena, vec_t(reg_t), next_reg),
   };
 }
@@ -517,8 +521,10 @@ static void free_intf(intf_t* intf) {
   vec_free(intf->copies);
 }
 
-static void build_intf(intf_t* intf, machine_block_t* block_head, uint64_t** live_out, reg_t next_reg) {
+static void build_intf(intf_t* intf, machine_block_t* block_head, int block_count, reg_t next_reg) {
   scratch_t scratch = scratch_get(0, NULL);
+
+  uint64_t** live_out = compute_live_out(scratch.arena, block_count, block_head, next_reg);
 
   live_now_t live_now = {
     .dense = arena_array(scratch.arena, reg_t, next_reg),
@@ -533,9 +539,16 @@ static void build_intf(intf_t* intf, machine_block_t* block_head, uint64_t** liv
   vec_clear(intf->copies);
 
   bitset_clear(intf->matrix, lo_tri_bitset_index(next_reg));
+  memset(intf->spill_cost, 0, next_reg * sizeof(intf->spill_cost[0]));
 
   foreach_list(machine_block_t, mb, block_head) {
     assert(live_now.count == 0);
+
+    int spill_factor = 1;
+
+    for (int i = 0; i < mb->loop_nesting; ++i) {
+      spill_factor *= 10;
+    }
 
     for (reg_t r = 0; r < next_reg; ++r) {
       if (bitset_get(live_out[mb->id], r)) {
@@ -567,11 +580,13 @@ static void build_intf(intf_t* intf, machine_block_t* block_head, uint64_t** liv
       for (int j = 0; j < inst->num_writes; ++j) {
         reg_t x = inst->writes[j];
         live_now_remove(&live_now, x);
+        intf->spill_cost[x] += spill_factor;
       }
 
       for (int j = 0; j < inst->num_reads; ++j) {
         reg_t x = inst->reads[j];
         live_now_add(&live_now, x);
+        intf->spill_cost[x] += spill_factor;
       }
 
       if (inst->op == X64_INST_MOV32_RR) {
@@ -595,10 +610,8 @@ static reg_t get_coalesced(reg_t* coalesced_map, reg_t x) {
   return x;
 }
 
-static void regalloc(machine_block_t* block_head, int block_count, reg_t next_reg) { 
-  scratch_t scratch = scratch_get(0, NULL);
-
-  uint64_t** live_out = compute_live_out(scratch.arena, block_count, block_head, next_reg);
+static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int block_count, reg_t next_reg) { 
+  scratch_t scratch = scratch_get(1, &arena);
 
   intf_t intf = init_intf(scratch.arena, next_reg);
   reg_t* coalesce_map = arena_array(scratch.arena, reg_t, next_reg);
@@ -608,7 +621,7 @@ static void regalloc(machine_block_t* block_head, int block_count, reg_t next_re
   }
 
   for (;;) {
-    build_intf(&intf, block_head, live_out, next_reg);
+    build_intf(&intf, block_head, block_count, next_reg);
 
     bool any_coalesced = false;
 
@@ -624,8 +637,6 @@ static void regalloc(machine_block_t* block_head, int block_count, reg_t next_re
 
       if (!intf_matrix_get(intf.matrix, dest, src)) {
         coalesce_map[dest] = src;
-
-        printf("Coalescing %u -> %u\n", dest, src);
 
         for (int j = 0; j < vec_len(intf.adj[dest]); ++j) {
           reg_t y = intf.adj[dest][j];
@@ -692,8 +703,6 @@ static void regalloc(machine_block_t* block_head, int block_count, reg_t next_re
   reg_t* stack = arena_array(scratch.arena, reg_t, next_reg);
 
   while (simplify_left_count > 0) {
-    bool changed = false;
-
     for (int i = simplify_left_count-1; i >= 0; --i) {
       reg_t x = simplify_left[i];
 
@@ -705,17 +714,31 @@ static void regalloc(machine_block_t* block_head, int block_count, reg_t next_re
           reg_t y = intf.adj[x][j];
           degree[y]--;
         }
-
-        changed = true;
       }
     }
 
-    if (!changed) {
+    if (simplify_left_count == 0) {
       break;
     }
-  }
 
-  assert(simplify_left_count == 0 && "graph not trivially colorable");
+    int best_cost = INT32_MAX;
+    int best_index = NULL_REG;
+
+    // choose a "spill-candidate" - will still push onto select stack
+    for (int i = 0; i < simplify_left_count; ++i) {
+      reg_t x = simplify_left[i];
+
+      if (intf.spill_cost[x] < best_cost) {
+        best_cost = intf.spill_cost[x];
+        best_index = i;
+      }
+    }
+
+    reg_t x = simplify_left[best_index];
+    simplify_left[best_index] = simplify_left[--simplify_left_count];
+
+    stack[stack_count++] = x;
+  }
 
   reg_t* map = arena_array(scratch.arena, reg_t, next_reg);
 
@@ -724,9 +747,25 @@ static void regalloc(machine_block_t* block_head, int block_count, reg_t next_re
   }
 
   uint64_t* taken = bitset_alloc(scratch.arena, NUM_PRS);
+  uint64_t* spill_set = bitset_alloc(scratch.arena, next_reg);
+
+  bool any_spill = false;
+  alloca_t** spill_loc = arena_array(scratch.arena, alloca_t*, next_reg);
+
+  // pre-color fixed registers
+
+  for (reg_t r = 0; r < FIRST_VR; ++r) {
+    map[r] = r;
+  }
+
+  // attempt to find a coloring
 
   while (stack_count) {
     reg_t x = stack[--stack_count];
+
+    if (x < FIRST_VR) {
+      continue;
+    }
 
     bitset_clear(taken, NUM_PRS);
 
@@ -743,25 +782,80 @@ static void regalloc(machine_block_t* block_head, int block_count, reg_t next_re
         map[x] = pr;
       }
     }
+
+    if (map[x] == NULL_REG) {
+      spill_loc[x] = arena_type(arena, alloca_t);
+      bitset_set(spill_set, x);
+      any_spill = true;
+    }
   }
 
-  foreach_list(machine_block_t, mb, block_head) {
-    for (int i = 0; i < vec_len(mb->code); ++i) {
-      machine_inst_t* inst = mb->code + i;
+  if (any_spill) {
+    foreach_list(machine_block_t, mb, block_head) {
+      vec_t(machine_inst_t) new_code = NULL;
 
-      for (int j = 0; j < inst->num_writes; ++j) {
-        inst->writes[j] = map[inst->writes[j]];
+      for (int i = 0; i < vec_len(mb->code); ++i) {
+        machine_inst_t* inst = mb->code + i;
+
+        for (int j = 0; j < inst->num_reads; ++j) {
+          reg_t x = inst->reads[j];
+
+          if (!bitset_get(spill_set, x)) {
+            continue;
+          }
+
+          reg_t y = inst->reads[j] = next_reg++;
+          vec_put(new_code, inst_mov32_rm(arena, y, spill_loc[x]));
+        }
+
+        vec_put(new_code, *inst);
+
+        for (int j = 0; j < inst->num_writes; ++j) {
+          reg_t x = inst->writes[j];
+
+          if (!bitset_get(spill_set, x)) {
+            continue;
+          }
+
+          reg_t y = inst->writes[j] = next_reg++;
+          vec_put(new_code, inst_mov32_mr(arena, y, spill_loc[x]));
+        }
       }
 
-      for (int j = 0; j < inst->num_reads; ++j) {
-        inst->reads[j] = map[inst->reads[j]];
+      vec_free(mb->code);
+      mb->code = new_code;
+    }
+  }
+  else {
+    foreach_list(machine_block_t, mb, block_head) {
+      for (int i = 0; i < vec_len(mb->code); ++i) {
+        machine_inst_t* inst = mb->code + i;
+
+        for (int j = 0; j < inst->num_writes; ++j) {
+          inst->writes[j] = map[inst->writes[j]];
+        }
+
+        for (int j = 0; j < inst->num_reads; ++j) {
+          inst->reads[j] = map[inst->reads[j]];
+        }
       }
     }
   }
 
   free_intf(&intf);
-
   scratch_release(&scratch);
+
+  return next_reg;
+}
+
+static void regalloc(arena_t* arena, machine_block_t* block_head, int block_count, reg_t next_reg) { 
+  reg_t x;
+
+  int iterations = 0;
+
+  while (iterations++ < 3 && (x = regalloc_try_color(arena, block_head, block_count, next_reg)) > next_reg) {
+    next_reg = x;
+  }
 }
 
 static void dump_func(machine_block_t* block_head) {
@@ -797,6 +891,7 @@ void cb_generate_x64(cb_func_t* func) {
     machine_block_t* mb = block_tail = block_tail->next = arena_type(scratch.arena, machine_block_t);
     mb->b = b;
     mb->id = b->id;
+    mb->loop_nesting = b->loop_nesting;
     block_map[b->id] = mb;
   }
 
@@ -888,7 +983,7 @@ void cb_generate_x64(cb_func_t* func) {
     }
 
     if (mb->successor_count == 1) {
-      vec_put(mb->code, inst_jmp(&g, mb->successors[0]));
+      vec_put(mb->code, inst_jmp(g.arena, mb->successors[0]));
       mb->terminator_count = 1;
     }
   }
@@ -905,14 +1000,14 @@ void cb_generate_x64(cb_func_t* func) {
       cb_node_t* in = phi->ins[j];
       machine_block_t* pred = block_map[gcm.map[in->id]->id];
 
-      insert_before_n(pred, inst_mov32_rr(&g, temp, reg_map[in->id]), pred->terminator_count);
+      insert_before_n(pred, inst_mov32_rr(g.arena, temp, reg_map[in->id]), pred->terminator_count);
     }
 
-    prepend(mb, inst_mov32_rr(&g, reg_map[phi->id], temp));
+    prepend(mb, inst_mov32_rr(g.arena, reg_map[phi->id], temp));
   }
 
   dump_func(block_head.next);
-  regalloc(block_head.next, gcm.block_count, g.next_reg);
+  regalloc(scratch.arena, block_head.next, gcm.block_count, g.next_reg);
   dump_func(block_head.next);
 
   vec_free(stack);

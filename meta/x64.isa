@@ -16,7 +16,7 @@ eax = idiv_r 0, edx, eax; "idiv {R32(inst->reads[0]):s}"
 0 = mov32_rr 1; "mov {R32(inst->writes[0]):s}, {R32(inst->reads[0]):s}"
 
 _ = mov32_mr "(uint64_t)loc", 0 : "alloca_t* loc"; "mov [{ALLOCA((alloca_t*)inst->data):s}], {R32(inst->reads[0]):s}"
-_ = mov32_mi "make_mov32_mi_data(g, loc, i)" : "alloca_t* loc", "uint32_t i"; "mov [{ALLOCA(((mov32_mi_data_t*)inst->data)->loc):s}], {((mov32_mi_data_t*)inst->data)->i:u}"
+_ = mov32_mi "make_mov32_mi_data(arena, loc, i)" : "alloca_t* loc", "uint32_t i"; "mov [{ALLOCA(((mov32_mi_data_t*)inst->data)->loc):s}], {((mov32_mi_data_t*)inst->data)->i:u}"
 
 _ = ret; "ret"
 
