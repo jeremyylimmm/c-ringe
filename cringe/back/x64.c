@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <stdarg.h>
 
 #include "internal.h"
@@ -610,7 +611,13 @@ static reg_t get_coalesced(reg_t* coalesced_map, reg_t x) {
   return x;
 }
 
-static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int block_count, reg_t next_reg) { 
+static alloca_t* new_alloca(arena_t* arena, int* next_alloca_id) {
+  alloca_t* a = arena_type(arena, alloca_t);
+  a->id = (*next_alloca_id)++;
+  return a;
+}
+
+static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int block_count, reg_t next_reg, int* next_alloca_id) { 
   scratch_t scratch = scratch_get(1, &arena);
 
   intf_t intf = init_intf(scratch.arena, next_reg);
@@ -695,7 +702,10 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
   reg_t* simplify_left = arena_array(scratch.arena, reg_t, next_reg);
 
   for (reg_t r = 0; r < next_reg; ++r) {
-    simplify_left[simplify_left_count++] = r;
+    if (r >= FIRST_VR) {
+      simplify_left[simplify_left_count++] = r;
+    }
+
     degree[r] = (int)vec_len(intf.adj[r]);
   }
 
@@ -706,14 +716,12 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
     for (int i = simplify_left_count-1; i >= 0; --i) {
       reg_t x = simplify_left[i];
 
-      if (degree[x] < NUM_PRS) {
-        simplify_left[i] = simplify_left[--simplify_left_count];
-        stack[stack_count++] = x;
+      simplify_left[i] = simplify_left[--simplify_left_count];
+      stack[stack_count++] = x;
 
-        for (int j = 0; j < vec_len(intf.adj[x]); ++j) {
-          reg_t y = intf.adj[x][j];
-          degree[y]--;
-        }
+      for (int j = 0; j < vec_len(intf.adj[x]); ++j) {
+        reg_t y = intf.adj[x][j];
+        degree[y]--;
       }
     }
 
@@ -763,10 +771,6 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
   while (stack_count) {
     reg_t x = stack[--stack_count];
 
-    if (x < FIRST_VR) {
-      continue;
-    }
-
     bitset_clear(taken, NUM_PRS);
 
     for (int i = 0; i < vec_len(intf.adj[x]); ++i) {
@@ -784,7 +788,7 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
     }
 
     if (map[x] == NULL_REG) {
-      spill_loc[x] = arena_type(arena, alloca_t);
+      spill_loc[x] = new_alloca(arena, next_alloca_id);
       bitset_set(spill_set, x);
       any_spill = true;
     }
@@ -808,16 +812,17 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
           vec_put(new_code, inst_mov32_rm(arena, y, spill_loc[x]));
         }
 
+        int new_inst = (int)vec_len(new_code);
         vec_put(new_code, *inst);
 
         for (int j = 0; j < inst->num_writes; ++j) {
-          reg_t x = inst->writes[j];
+          reg_t x = new_code[new_inst].writes[j];
 
           if (!bitset_get(spill_set, x)) {
             continue;
           }
 
-          reg_t y = inst->writes[j] = next_reg++;
+          reg_t y = new_code[new_inst].writes[j] = next_reg++;
           vec_put(new_code, inst_mov32_mr(arena, y, spill_loc[x]));
         }
       }
@@ -848,13 +853,18 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
   return next_reg;
 }
 
-static void regalloc(arena_t* arena, machine_block_t* block_head, int block_count, reg_t next_reg) { 
+static void regalloc(arena_t* arena, machine_block_t* block_head, int block_count, reg_t next_reg, int* next_alloca_id) { 
   reg_t x;
 
   int iterations = 0;
 
-  while (iterations++ < 3 && (x = regalloc_try_color(arena, block_head, block_count, next_reg)) > next_reg) {
+  while (iterations++ < 10 && (x = regalloc_try_color(arena, block_head, block_count, next_reg, next_alloca_id)) > next_reg) {
     next_reg = x;
+  }
+
+  if (iterations == 10) {
+    printf("compiler bug: register allocation failed!\n");
+    exit(1);
   }
 }
 
@@ -959,9 +969,7 @@ void cb_generate_x64(cb_func_t* func) {
           break;
 
         case CB_NODE_ALLOCA: {
-          alloca_t* a = arena_type(scratch.arena, alloca_t);
-          a->id = next_alloca_id++;
-          alloca_map[node->id] = a;
+          alloca_map[node->id] = new_alloca(scratch.arena, &next_alloca_id);
         } break;
 
         case CB_NODE_PHI: {
@@ -1007,7 +1015,7 @@ void cb_generate_x64(cb_func_t* func) {
   }
 
   dump_func(block_head.next);
-  regalloc(scratch.arena, block_head.next, gcm.block_count, g.next_reg);
+  regalloc(scratch.arena, block_head.next, gcm.block_count, g.next_reg, &next_alloca_id);
   dump_func(block_head.next);
 
   vec_free(stack);
