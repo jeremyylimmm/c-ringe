@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdarg.h>
+#include <math.h>
 
 #include "internal.h"
 
@@ -29,19 +30,37 @@ enum {
   PR_EAX,
   PR_ECX,
   PR_EDX,
-  FIRST_VR,
+
+  NUM_ALLOCATABLE_PRS,
+  PR_ESP = NUM_ALLOCATABLE_PRS,
+  //PR_EBP,
+
+  FIRST_VR = NUM_ALLOCATABLE_PRS,
   NUM_PRS = FIRST_VR
 };
 
 static char* pr_names32[NUM_PRS] = {
   "eax",
   "ecx",
-  "edx"
+  "edx",
+  //"esp",
+  //"ebp",
 };
 
-typedef struct {
+static char* pr_names64[NUM_PRS] = {
+  "rax",
+  "rcx",
+  "rdx",
+  //"rsp",
+  //"rbp",
+};
+
+typedef struct alloca_t alloca_t;
+struct alloca_t {
+  alloca_t* next;
   int id;
-} alloca_t;
+  int offset;
+};
 
 #define INST_MAX_READS 4
 #define INST_MAX_WRITES 4
@@ -77,15 +96,24 @@ struct machine_block_t {
 };
 
 typedef struct {
+  machine_block_t* block_head;
+  alloca_t* alloca_head;
+  int next_alloca_id;
+  int block_count;
+  reg_t next_reg;
+} machine_func_t;
+
+typedef struct {
   arena_t* arena;
 
   machine_block_t** block_map;
   cb_gcm_result_t* gcm;
 
   reg_t* reg_map;
-  reg_t next_reg;
   machine_block_t* mb;
   alloca_t** alloca_map;
+  
+  machine_func_t* func;
 } gen_context_t;
 
 static void map_input(sel_context_t* s, cb_node_t* new_node, int new_index, cb_node_t* in) {
@@ -236,12 +264,26 @@ static char* format_reg32(arena_t* arena, reg_t reg) {
   }
 }
 
+static char* format_reg64(arena_t* arena, reg_t reg) {
+  if (reg >= FIRST_VR) {
+    return format_string(arena, "%%%u", reg);
+  }
+  else {
+    return format_string(arena, "%s", pr_names64[reg]);
+  }
+}
+
 static char* format_alloca(arena_t* arena, alloca_t* a) {
-  return format_string(arena, "STACK%d", a->id);
+  if (a->offset == -1) {
+    return format_string(arena, "STACK%d", a->id);
+  }
+  else {
+    return format_string(arena, "rbp-%d", a->offset);
+  }
 }
 
 static reg_t new_reg(gen_context_t* g) {
-  return g->next_reg++;
+  return g->func->next_reg++;
 }
 
 static machine_block_t* get_branch_dest(gen_context_t* g, cb_node_t* node, cb_node_kind_t proj_kind) {
@@ -264,6 +306,7 @@ static machine_block_t* get_branch_else(gen_context_t* g, cb_node_t* node) {
 }
 
 #define R32(r) format_reg32(scratch.arena, r)
+#define R64(r) format_reg64(scratch.arena, r)
 #define ALLOCA(a) format_alloca(scratch.arena, a)
 
 #define GET_REG(idx) g->reg_map[node->ins[idx]->id]
@@ -356,16 +399,26 @@ cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
   return new_func;
 };
 
-static void prepend(machine_block_t* mb, machine_inst_t inst) {
+static void prepend_n(machine_block_t* mb, machine_inst_t* insts, int n) {
   machine_inst_t blank = {0};
-  vec_put(mb->code, blank);
 
-  for (int i = (int)vec_len(mb->code)-1; i >= 1; --i) {
-    mb->code[i] = mb->code[i-1];
+  for (int i = 0; i < n; ++i) {
+    vec_put(mb->code, blank);
   }
 
-  mb->code[0] = inst;
+  for (int i = (int)vec_len(mb->code)-1; i >= n; --i) {
+    mb->code[i] = mb->code[i-n];
+  }
+
+  for (int i = 0; i < n; ++i) {
+    mb->code[i] = insts[i];
+  }
 }
+
+static void prepend(machine_block_t* mb, machine_inst_t inst) {
+  prepend_n(mb, &inst, 1);
+}
+
 
 static void insert_before_n(machine_block_t* mb, machine_inst_t inst, int n) {
   machine_inst_t blank = {0};
@@ -379,17 +432,17 @@ static void insert_before_n(machine_block_t* mb, machine_inst_t inst, int n) {
   mb->code[i] = inst;
 }
 
-static uint64_t** compute_live_out(arena_t* arena, int block_count, machine_block_t* block_head, reg_t next_reg) {
+static uint64_t** compute_live_out(arena_t* arena, machine_func_t* func) {
   scratch_t scratch = scratch_get(1, &arena); 
 
-  uint64_t** ue_var   = arena_array(scratch.arena, uint64_t*, block_count);
-  uint64_t** var_kill = arena_array(scratch.arena, uint64_t*, block_count);
-  uint64_t** live_out = arena_array(arena, uint64_t*, block_count);
+  uint64_t** ue_var   = arena_array(scratch.arena, uint64_t*, func->block_count);
+  uint64_t** var_kill = arena_array(scratch.arena, uint64_t*, func->block_count);
+  uint64_t** live_out = arena_array(arena, uint64_t*, func->block_count);
 
-  foreach_list(machine_block_t, mb, block_head) {
-    ue_var[mb->id]   = bitset_alloc(scratch.arena, next_reg);
-    var_kill[mb->id] = bitset_alloc(scratch.arena, next_reg);
-    live_out[mb->id] = bitset_alloc(arena, next_reg);
+  foreach_list(machine_block_t, mb, func->block_head) {
+    ue_var[mb->id]   = bitset_alloc(scratch.arena, func->next_reg);
+    var_kill[mb->id] = bitset_alloc(scratch.arena, func->next_reg);
+    live_out[mb->id] = bitset_alloc(arena, func->next_reg);
 
     for (int i = 0; i < vec_len(mb->code); ++i) {
       machine_inst_t* inst = mb->code + i;
@@ -409,12 +462,12 @@ static uint64_t** compute_live_out(arena_t* arena, int block_count, machine_bloc
     }
   }
 
-  size_t num_words = bitset_u64_count(block_count);
+  size_t num_words = bitset_u64_count(func->block_count);
 
   for (;;) {
     bool changed = false;
 
-    foreach_list(machine_block_t, n, block_head) {
+    foreach_list(machine_block_t, n, func->block_head) {
       for (int s = 0; s < n->successor_count; ++s) {
         machine_block_t* m = n->successors[s];
 
@@ -522,27 +575,27 @@ static void free_intf(intf_t* intf) {
   vec_free(intf->copies);
 }
 
-static void build_intf(intf_t* intf, machine_block_t* block_head, int block_count, reg_t next_reg) {
+static void build_intf(intf_t* intf, machine_func_t* func) {
   scratch_t scratch = scratch_get(0, NULL);
 
-  uint64_t** live_out = compute_live_out(scratch.arena, block_count, block_head, next_reg);
+  uint64_t** live_out = compute_live_out(scratch.arena, func);
 
   live_now_t live_now = {
-    .dense = arena_array(scratch.arena, reg_t, next_reg),
-    .sparse = arena_array(scratch.arena, int, next_reg),
+    .dense = arena_array(scratch.arena, reg_t, func->next_reg),
+    .sparse = arena_array(scratch.arena, int,  func->next_reg),
   };
 
-  for (reg_t r = 0; r < next_reg; ++r) {
+  for (reg_t r = 0; r < func->next_reg; ++r) {
     live_now.sparse[r] = -1;
     vec_clear(intf->adj[r]);
   }
 
   vec_clear(intf->copies);
 
-  bitset_clear(intf->matrix, lo_tri_bitset_index(next_reg));
-  memset(intf->spill_cost, 0, next_reg * sizeof(intf->spill_cost[0]));
+  bitset_clear(intf->matrix, lo_tri_bitset_index(func->next_reg));
+  memset(intf->spill_cost, 0, func->next_reg * sizeof(intf->spill_cost[0]));
 
-  foreach_list(machine_block_t, mb, block_head) {
+  foreach_list(machine_block_t, mb, func->block_head) {
     assert(live_now.count == 0);
 
     int spill_factor = 1;
@@ -551,7 +604,7 @@ static void build_intf(intf_t* intf, machine_block_t* block_head, int block_coun
       spill_factor *= 10;
     }
 
-    for (reg_t r = 0; r < next_reg; ++r) {
+    for (reg_t r = 0; r < func->next_reg; ++r) {
       if (bitset_get(live_out[mb->id], r)) {
         live_now_add(&live_now, r);
       }
@@ -611,24 +664,41 @@ static reg_t get_coalesced(reg_t* coalesced_map, reg_t x) {
   return x;
 }
 
-static alloca_t* new_alloca(arena_t* arena, int* next_alloca_id) {
+static alloca_t* new_alloca(arena_t* arena, machine_func_t* func) {
   alloca_t* a = arena_type(arena, alloca_t);
-  a->id = (*next_alloca_id)++;
+  a->id = func->next_alloca_id++;
+  a->offset = -1;
+
+  a->next = func->alloca_head;
+  func->alloca_head = a;
+
   return a;
 }
 
-static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int block_count, reg_t next_reg, int* next_alloca_id) { 
+static void add_to_select_stack(int index, intf_t* intf, int* degree, reg_t* simplify_left, int* simplify_left_count, reg_t* stack, int* stack_count) {
+  reg_t x = simplify_left[index];
+
+  simplify_left[index] = simplify_left[--(*simplify_left_count)];
+  stack[(*stack_count)++] = x;
+
+  for (int j = 0; j < vec_len(intf->adj[x]); ++j) {
+    reg_t y = intf->adj[x][j];
+    degree[y]--;
+  }
+}
+
+static void regalloc_try_color(arena_t* arena, machine_func_t* func) { 
   scratch_t scratch = scratch_get(1, &arena);
 
-  intf_t intf = init_intf(scratch.arena, next_reg);
-  reg_t* coalesce_map = arena_array(scratch.arena, reg_t, next_reg);
+  intf_t intf = init_intf(scratch.arena, func->next_reg);
+  reg_t* coalesce_map = arena_array(scratch.arena, reg_t, func->next_reg);
 
-  for (reg_t r = 0; r < next_reg; ++r) {
+  for (reg_t r = 0; r < func->next_reg; ++r) {
     coalesce_map[r] = r;
   }
 
   for (;;) {
-    build_intf(&intf, block_head, block_count, next_reg);
+    build_intf(&intf, func);
 
     bool any_coalesced = false;
 
@@ -662,7 +732,7 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
 
     // rewrite code to use coalesced registers
 
-    foreach_list(machine_block_t, mb, block_head) {
+    foreach_list(machine_block_t, mb, func->block_head) {
       int lo = 0;
       int hi = 0;
 
@@ -696,12 +766,12 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
     }
   }
 
-  int* degree = arena_array(scratch.arena, int, next_reg);
+  int* degree = arena_array(scratch.arena, int, func->next_reg);
 
   int simplify_left_count = 0;
-  reg_t* simplify_left = arena_array(scratch.arena, reg_t, next_reg);
+  reg_t* simplify_left = arena_array(scratch.arena, reg_t, func->next_reg);
 
-  for (reg_t r = 0; r < next_reg; ++r) {
+  for (reg_t r = 0; r < func->next_reg; ++r) {
     if (r >= FIRST_VR) {
       simplify_left[simplify_left_count++] = r;
     }
@@ -710,18 +780,14 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
   }
 
   int stack_count = 0;
-  reg_t* stack = arena_array(scratch.arena, reg_t, next_reg);
+  reg_t* stack = arena_array(scratch.arena, reg_t, func->next_reg);
 
   while (simplify_left_count > 0) {
     for (int i = simplify_left_count-1; i >= 0; --i) {
       reg_t x = simplify_left[i];
 
-      simplify_left[i] = simplify_left[--simplify_left_count];
-      stack[stack_count++] = x;
-
-      for (int j = 0; j < vec_len(intf.adj[x]); ++j) {
-        reg_t y = intf.adj[x][j];
-        degree[y]--;
+      if (degree[x] < NUM_ALLOCATABLE_PRS) {
+        add_to_select_stack(i, &intf, degree, simplify_left, &simplify_left_count, stack, &stack_count);
       }
     }
 
@@ -729,36 +795,35 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
       break;
     }
 
-    int best_cost = INT32_MAX;
+    float best_cost = INFINITY;
     int best_index = NULL_REG;
 
     // choose a "spill-candidate" - will still push onto select stack
     for (int i = 0; i < simplify_left_count; ++i) {
       reg_t x = simplify_left[i];
 
-      if (intf.spill_cost[x] < best_cost) {
-        best_cost = intf.spill_cost[x];
+      float cost = (float)intf.spill_cost[x]/(float)degree[x];
+
+      if (cost < best_cost) {
+        best_cost = cost;
         best_index = i;
       }
     }
 
-    reg_t x = simplify_left[best_index];
-    simplify_left[best_index] = simplify_left[--simplify_left_count];
-
-    stack[stack_count++] = x;
+    add_to_select_stack(best_index, &intf, degree, simplify_left, &simplify_left_count, stack, &stack_count);
   }
 
-  reg_t* map = arena_array(scratch.arena, reg_t, next_reg);
+  reg_t* map = arena_array(scratch.arena, reg_t, func->next_reg);
 
-  for (reg_t r = 0; r < next_reg; ++r) {
+  for (reg_t r = 0; r < func->next_reg; ++r) {
     map[r] = NULL_REG;
   }
 
-  uint64_t* taken = bitset_alloc(scratch.arena, NUM_PRS);
-  uint64_t* spill_set = bitset_alloc(scratch.arena, next_reg);
+  uint64_t* taken = bitset_alloc(scratch.arena, NUM_ALLOCATABLE_PRS);
+  uint64_t* spill_set = bitset_alloc(scratch.arena, func->next_reg);
 
   bool any_spill = false;
-  alloca_t** spill_loc = arena_array(scratch.arena, alloca_t*, next_reg);
+  alloca_t** spill_loc = arena_array(scratch.arena, alloca_t*, func->next_reg);
 
   // pre-color fixed registers
 
@@ -771,7 +836,7 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
   while (stack_count) {
     reg_t x = stack[--stack_count];
 
-    bitset_clear(taken, NUM_PRS);
+    bitset_clear(taken, NUM_ALLOCATABLE_PRS);
 
     for (int i = 0; i < vec_len(intf.adj[x]); ++i) {
       reg_t y = intf.adj[x][i];
@@ -781,21 +846,21 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
       }
     }
 
-    for (reg_t pr = 0; map[x] == NULL_REG && pr < NUM_PRS; ++pr) {
+    for (reg_t pr = 0; map[x] == NULL_REG && pr < NUM_ALLOCATABLE_PRS; ++pr) {
       if (!bitset_get(taken, pr)) {
         map[x] = pr;
       }
     }
 
     if (map[x] == NULL_REG) {
-      spill_loc[x] = new_alloca(arena, next_alloca_id);
+      spill_loc[x] = new_alloca(arena, func);
       bitset_set(spill_set, x);
       any_spill = true;
     }
   }
 
   if (any_spill) {
-    foreach_list(machine_block_t, mb, block_head) {
+    foreach_list(machine_block_t, mb, func->block_head) {
       vec_t(machine_inst_t) new_code = NULL;
 
       for (int i = 0; i < vec_len(mb->code); ++i) {
@@ -808,7 +873,7 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
             continue;
           }
 
-          reg_t y = inst->reads[j] = next_reg++;
+          reg_t y = inst->reads[j] = func->next_reg++;
           vec_put(new_code, inst_mov32_rm(arena, y, spill_loc[x]));
         }
 
@@ -822,7 +887,7 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
             continue;
           }
 
-          reg_t y = new_code[new_inst].writes[j] = next_reg++;
+          reg_t y = new_code[new_inst].writes[j] = func->next_reg++;
           vec_put(new_code, inst_mov32_mr(arena, y, spill_loc[x]));
         }
       }
@@ -832,7 +897,7 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
     }
   }
   else {
-    foreach_list(machine_block_t, mb, block_head) {
+    foreach_list(machine_block_t, mb, func->block_head) {
       for (int i = 0; i < vec_len(mb->code); ++i) {
         machine_inst_t* inst = mb->code + i;
 
@@ -849,17 +914,21 @@ static reg_t regalloc_try_color(arena_t* arena, machine_block_t* block_head, int
 
   free_intf(&intf);
   scratch_release(&scratch);
-
-  return next_reg;
 }
 
-static void regalloc(arena_t* arena, machine_block_t* block_head, int block_count, reg_t next_reg, int* next_alloca_id) { 
-  reg_t x;
-
+static void regalloc(arena_t* arena, machine_func_t* func) { 
   int iterations = 0;
 
-  while (iterations++ < 10 && (x = regalloc_try_color(arena, block_head, block_count, next_reg, next_alloca_id)) > next_reg) {
-    next_reg = x;
+  reg_t prev = func->next_reg;
+
+  while (iterations++ < 10) {
+    regalloc_try_color(arena, func);
+
+    if (func->next_reg == prev) {
+      break;
+    }
+
+    prev = func->next_reg;
   }
 
   if (iterations == 10) {
@@ -868,8 +937,8 @@ static void regalloc(arena_t* arena, machine_block_t* block_head, int block_coun
   }
 }
 
-static void dump_func(machine_block_t* block_head) {
-  foreach_list(machine_block_t, mb, block_head) {
+static void dump_func(machine_func_t* func) {
+  foreach_list(machine_block_t, mb, func->block_head) {
     printf("bb_%d:\n", mb->id);
 
     for (int i = 0; i < vec_len(mb->code); ++i) {
@@ -887,22 +956,30 @@ static void dump_func(machine_block_t* block_head) {
 void cb_generate_x64(cb_func_t* func) {
   scratch_t scratch = scratch_get(0, NULL);  
 
+  machine_func_t machine_func = {
+    .next_reg = FIRST_VR
+  };
+
   cb_gcm_result_t gcm = cb_run_global_code_motion(scratch.arena, func);
 
   machine_block_t** block_map = arena_array(scratch.arena, machine_block_t*, gcm.block_count);
-
-  machine_block_t block_head = {0};
-  machine_block_t* block_tail = &block_head;
-
   reg_t* reg_map = arena_array(scratch.arena, reg_t, func->next_id);
   alloca_t** alloca_map = arena_array(scratch.arena, alloca_t*, func->next_id);
 
-  foreach_list(cb_block_t, b, gcm.cfg) {
-    machine_block_t* mb = block_tail = block_tail->next = arena_type(scratch.arena, machine_block_t);
-    mb->b = b;
-    mb->id = b->id;
-    mb->loop_nesting = b->loop_nesting;
-    block_map[b->id] = mb;
+  {
+    machine_block_t block_head = {0};
+    machine_block_t* block_tail = &block_head;
+
+    foreach_list(cb_block_t, b, gcm.cfg) {
+      machine_block_t* mb = block_tail = block_tail->next = arena_type(scratch.arena, machine_block_t);
+      mb->b = b;
+      mb->id = b->id;
+      mb->loop_nesting = b->loop_nesting;
+      block_map[b->id] = mb;
+    }
+
+    machine_func.block_head = block_head.next;
+    machine_func.block_count = gcm.block_count;
   }
 
   foreach_list(cb_block_t, b, gcm.cfg) {
@@ -931,16 +1008,14 @@ void cb_generate_x64(cb_func_t* func) {
     .block_map = block_map,
 
     .reg_map = reg_map,
-    .next_reg = FIRST_VR,
+    .func = &machine_func,
     .alloca_map = alloca_map
   };
 
-  vec_put(stack, block_head.next);
+  vec_put(stack, machine_func.block_head);
 
   int phi_count = 0;
   cb_node_t** phis = arena_array(scratch.arena, cb_node_t*, func->next_id);
-
-  int next_alloca_id = 0;
 
   while (vec_len(stack)) { // generate the blocks in order specified by dominator tree -> defs dominate their uses except for phis
     machine_block_t* mb = vec_pop(stack);
@@ -969,7 +1044,7 @@ void cb_generate_x64(cb_func_t* func) {
           break;
 
         case CB_NODE_ALLOCA: {
-          alloca_map[node->id] = new_alloca(scratch.arena, &next_alloca_id);
+          alloca_map[node->id] = new_alloca(scratch.arena, &machine_func);
         } break;
 
         case CB_NODE_PHI: {
@@ -1014,9 +1089,17 @@ void cb_generate_x64(cb_func_t* func) {
     prepend(mb, inst_mov32_rr(g.arena, reg_map[phi->id], temp));
   }
 
-  dump_func(block_head.next);
-  regalloc(scratch.arena, block_head.next, gcm.block_count, g.next_reg, &next_alloca_id);
-  dump_func(block_head.next);
+  dump_func(&machine_func);
+  regalloc(scratch.arena, &machine_func);
+
+  int stack_size = 0; 
+
+  foreach_list(alloca_t, a, machine_func.alloca_head) {
+    a->offset = stack_size;
+    stack_size += 4;
+  }
+
+  dump_func(&machine_func);
 
   vec_free(stack);
   scratch_release(&scratch);

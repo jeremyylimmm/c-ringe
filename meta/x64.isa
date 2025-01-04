@@ -25,7 +25,8 @@ _ = jz "(uint64_t)loc" : "machine_block_t* loc"; "jz bb_{((machine_block_t*)inst
 _ = jmp "(uint64_t)loc" : "machine_block_t* loc"; "jmp bb_{((machine_block_t*)inst->data)->id:u}"
 
 
-
+_ = push64 0; "push {R64(inst->reads[0]):s}"
+0 = pop64; "pop {R64(inst->writes[0]):s}"
 
 
 #nodes
