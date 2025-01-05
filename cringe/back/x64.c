@@ -555,6 +555,7 @@ typedef struct {
   reg_t next_reg;
   uint64_t* matrix;
   int* spill_cost;
+  int* area;
   vec_t(reg_t)* adj;
   vec_t(machine_inst_t*) copies;
 } intf_t;
@@ -563,6 +564,7 @@ static intf_t init_intf(arena_t* arena, reg_t next_reg) {
   return (intf_t) {
     .matrix = bitset_alloc(arena, lo_tri_bitset_index(next_reg)),
     .spill_cost = arena_array(arena, int, next_reg),
+    .area = arena_array(arena, int, next_reg),
     .adj = arena_array(arena, vec_t(reg_t), next_reg),
   };
 }
@@ -594,14 +596,15 @@ static void build_intf(intf_t* intf, machine_func_t* func) {
 
   bitset_clear(intf->matrix, lo_tri_bitset_index(func->next_reg));
   memset(intf->spill_cost, 0, func->next_reg * sizeof(intf->spill_cost[0]));
+  memset(intf->area, 0, func->next_reg * sizeof(intf->area[0]));
 
   foreach_list(machine_block_t, mb, func->block_head) {
     assert(live_now.count == 0);
 
-    int spill_factor = 1;
+    int exec_factor = 1;
 
     for (int i = 0; i < mb->loop_nesting; ++i) {
-      spill_factor *= 10;
+      exec_factor *= 10;
     }
 
     for (reg_t r = 0; r < func->next_reg; ++r) {
@@ -634,17 +637,22 @@ static void build_intf(intf_t* intf, machine_func_t* func) {
       for (int j = 0; j < inst->num_writes; ++j) {
         reg_t x = inst->writes[j];
         live_now_remove(&live_now, x);
-        intf->spill_cost[x] += spill_factor;
+        intf->spill_cost[x] += exec_factor;
       }
 
       for (int j = 0; j < inst->num_reads; ++j) {
         reg_t x = inst->reads[j];
         live_now_add(&live_now, x);
-        intf->spill_cost[x] += spill_factor;
+        intf->spill_cost[x] += exec_factor;
       }
 
       if (inst->op == X64_INST_MOV32_RR) {
         vec_put(intf->copies, inst);
+      }
+
+      for (int j = 0; j < live_now.count; ++j) {
+        reg_t x = live_now.dense[j];
+        intf->area[x] += exec_factor * live_now.count;
       }
     }
 
@@ -802,7 +810,7 @@ static void regalloc_try_color(arena_t* arena, machine_func_t* func) {
     for (int i = 0; i < simplify_left_count; ++i) {
       reg_t x = simplify_left[i];
 
-      float cost = (float)intf.spill_cost[x]/(float)degree[x];
+      float cost = (float)intf.spill_cost[x]/((float)degree[x]*(float)intf.area[x]);
 
       if (cost < best_cost) {
         best_cost = cost;
