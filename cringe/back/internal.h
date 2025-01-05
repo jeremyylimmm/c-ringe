@@ -87,4 +87,6 @@ typedef struct {
 cb_node_t* gvn_get(gvn_table_t* table, cb_node_t* node);
 void gvn_remove(gvn_table_t* table, cb_node_t* node);
 
+void gvn_clear(gvn_table_t* table);
+
 void gvn_free_table(gvn_table_t* table);

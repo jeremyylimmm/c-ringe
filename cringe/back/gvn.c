@@ -18,9 +18,13 @@ static uint64_t hash_node(cb_node_t* node) {
   return hash;
 }
 
-static bool nodes_ident(cb_node_t* a, cb_node_t* b) {
+static bool nodes_ident(cb_node_t* a, cb_node_t* b, bool by_ptr) {
   if (a == b) {
     return true;
+  }
+
+  if (by_ptr) {
+    return false;
   }
 
   return a->flags == b->flags &&
@@ -31,7 +35,7 @@ static bool nodes_ident(cb_node_t* a, cb_node_t* b) {
          memcmp(DATA(a, void), DATA(b, void), a->data_size) == 0;
 }
 
-static int find(gvn_table_t* table, cb_node_t* node) {
+static int find(gvn_table_t* table, cb_node_t* node, bool by_ptr) {
   if (!table->capacity) {
     return INT32_MAX;
   }
@@ -56,7 +60,7 @@ static int find(gvn_table_t* table, cb_node_t* node) {
         break;
 
       default: {
-        if (nodes_ident(table->table[i], node)) {
+        if (nodes_ident(table->table[i], node, by_ptr)) {
           return i;
         }
       }
@@ -82,7 +86,7 @@ cb_node_t* gvn_get(gvn_table_t* table, cb_node_t* node) {
         continue;
       }
 
-      int idx = find(&new_table, table->table[i]);
+      int idx = find(&new_table, table->table[i], true);
       new_table.table[idx] = table->table[i];
       new_table.count++;
     }
@@ -91,7 +95,7 @@ cb_node_t* gvn_get(gvn_table_t* table, cb_node_t* node) {
     *table = new_table;
   }
 
-  int idx = find(table, node);
+  int idx = find(table, node, false);
 
   if (table->table[idx] == TOMBSTONE || table->table[idx] == NULL) {
     table->table[idx] = node;
@@ -102,11 +106,15 @@ cb_node_t* gvn_get(gvn_table_t* table, cb_node_t* node) {
 }
 
 void gvn_remove(gvn_table_t* table, cb_node_t* node) {
-  int x = find(table, node);
+  int x = find(table, node, true);
 
   if (x != INT32_MAX) {
     table->table[x] = TOMBSTONE;
   }
+}
+
+void gvn_clear(gvn_table_t* table) {
+  memset(table->table, 0, table->capacity * sizeof(table->table[0]));
 }
 
 void gvn_free_table(gvn_table_t* table) {

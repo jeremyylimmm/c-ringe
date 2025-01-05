@@ -8,6 +8,7 @@ edx, eax = cdq eax; "cdq"
 eax = idiv_r 0, edx, eax; "idiv {R32(inst->reads[0]):s}"
 
 0 = add32_ri 0, "(uint64_t)x" : "uint32_t x"; "add {R32(inst->reads[0]):s}, {(uint32_t)inst->data:u}"
+0 = sub32_ri 0, "(uint64_t)x" : "uint32_t x"; "sub {R32(inst->reads[0]):s}, {(uint32_t)inst->data:u}"
 0 = kill32; "kill32 {R32(inst->writes[0]):s}"
 
 0 = mov32_ri "(uint64_t)x" : "uint32_t x"; "mov {R32(inst->writes[0]):s}, {(uint32_t)inst->data:u}"
@@ -44,6 +45,7 @@ kill32() -> <kill32(dest)>;
 
 mov32_ri() {"uint32_t", "value"} : "uint32_t value" -> <mov32_ri(dest, "*DATA(node, uint32_t)")>;
 add32_ri(left) {"uint32_t", "right"} : "uint32_t right" -> <mov32_rr(dest, 0), add32_ri(dest, "*DATA(node, uint32_t)")>;
+sub32_ri(left) {"uint32_t", "right"} : "uint32_t right" -> <mov32_rr(dest, 0), sub32_ri(dest, "*DATA(node, uint32_t)")>;
 mov32_mr(ctrl, mem, address, value) (is_pinned, produces_memory) -> <mov32_mr(3, "g->alloca_map[node->ins[2]->id]")>;
 mov32_mi(ctrl, mem, address) {"uint32_t", "value"} : "uint32_t value" (is_pinned, produces_memory) -> <mov32_mi("g->alloca_map[node->ins[2]->id]", "*DATA(node, uint32_t)")>;
 
@@ -70,6 +72,8 @@ sdiv(l, r) -> idiv32_rr(l, r)
 
 add(l, constant:r()) -> add32_ri(l, "get_const_32(r)")
 add(constant:l(), r) -> add32_ri(r, "get_const_32(l)")
+
+sub(l, constant:r()) -> sub32_ri(l, "get_const_32(r)")
 
 store(c, m, a, v) -> mov32_mr(c, m, a, v)
 store(c, m, a, constant:x()) -> mov32_mi(c, m, a, "get_const_32(x)")

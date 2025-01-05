@@ -347,14 +347,25 @@ cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
     vec_clear(s.stack);
     vec_put(s.stack, bool_node(false, root));
 
+    bool root_processed = false;
+
     // do a post-order traversal
     while (vec_len(s.stack)) {
       bool_node_t item = vec_pop(s.stack);
       cb_node_t* node = item.node;
 
       if (!item.processed) {
-        if (node != root && bitset_get(is_root,node->id)) {
-          continue;
+        if (node == root) {
+          if (root_processed) {
+            continue;
+          }
+
+          root_processed = true;
+        }
+        else {
+          if (bitset_get(is_root, node->id)) {
+            continue;
+          }
         }
 
         vec_put(s.stack, bool_node(true, node));
@@ -562,6 +573,7 @@ typedef struct {
 
 static intf_t init_intf(arena_t* arena, reg_t next_reg) {
   return (intf_t) {
+    .next_reg = next_reg,
     .matrix = bitset_alloc(arena, lo_tri_bitset_index(next_reg)),
     .spill_cost = arena_array(arena, int, next_reg),
     .area = arena_array(arena, int, next_reg),
@@ -716,7 +728,7 @@ static void regalloc_try_color(arena_t* arena, machine_func_t* func) {
       reg_t dest = get_coalesced(coalesce_map, copy->writes[0]);
       reg_t src = get_coalesced(coalesce_map, copy->reads[0]);
 
-      if (dest < FIRST_VR || src < FIRST_VR) {
+      if (dest == src || dest < FIRST_VR || src < FIRST_VR) {
         continue;
       }
 

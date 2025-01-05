@@ -84,6 +84,7 @@ static void reset_context(cb_opt_context_t* opt, cb_func_t* func) {
   vec_clear(opt->worklist.sparse);
   vec_clear(opt->stack);
   opt->func = func;
+  gvn_clear(&opt->gvn_table);
 }
 
 typedef cb_node_t*(*idealize_func_t)(cb_opt_context_t*, cb_node_t*);
@@ -309,8 +310,9 @@ static void replace_node(cb_opt_context_t* opt, cb_node_t* target, cb_node_t* so
     cb_use_t* use = target->uses;
     target->uses = use->next;
 
+    gvn_remove(&opt->gvn_table, use->node); // we're gonna mutate the node
     worklist_add(opt, use->node);
-    
+
     assert(use->node->ins[use->index] == target);
     use->node->ins[use->index] = source;
 
