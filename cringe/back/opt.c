@@ -11,6 +11,7 @@ struct cb_opt_context_t {
   cb_func_t* func;
   worklist_t worklist;
   vec_t(bool_node_t) stack; // reset locally and used for recursive stuff
+  gvn_table_t gvn_table;
 };
 
 static void worklist_add(cb_opt_context_t* opt, cb_node_t* node) {
@@ -31,6 +32,8 @@ static void worklist_add(cb_opt_context_t* opt, cb_node_t* node) {
 
 static void worklist_remove(cb_opt_context_t* opt, cb_node_t* node) {
   worklist_t* w = &opt->worklist;
+
+  gvn_remove(&opt->gvn_table, node);
 
   if (node->id >= vec_len(w->sparse)) {
     return;
@@ -70,6 +73,8 @@ void cb_free_opt_context(cb_opt_context_t* opt) {
   vec_free(opt->worklist.packed);
   vec_free(opt->worklist.sparse);
   vec_free(opt->stack);
+
+  gvn_free_table(&opt->gvn_table);
 
   free(opt);
 }
@@ -319,19 +324,22 @@ static void replace_node(cb_opt_context_t* opt, cb_node_t* target, cb_node_t* so
 static void peepholes(cb_opt_context_t* opt) {
   while (!worklist_empty(opt)) {
     cb_node_t* node = worklist_pop(opt);
+
+    gvn_remove(&opt->gvn_table, node);
+
     idealize_func_t idealize = idealize_table[node->kind];
 
-    if (!idealize) {
-      continue;
+    cb_node_t* ideal = node;
+
+    if (idealize) {
+      ideal = idealize(opt, node);
     }
 
-    cb_node_t* ideal = idealize(opt, node);
+    ideal = gvn_get(&opt->gvn_table, ideal);
 
-    if (ideal == node) {
-      continue;
+    if (ideal != node) {
+      replace_node(opt, node, ideal);
     }
-
-    replace_node(opt, node, ideal);
   }
 }
 

@@ -77,3 +77,14 @@ cb_node_t* new_leaf(cb_func_t* func, cb_node_kind_t kind, int data_size, cb_node
 cb_use_t* find_and_remove_use(cb_node_t* user, int index);
 
 void set_input(cb_func_t* func, cb_node_t* node, cb_node_t* input, int index);
+
+typedef struct {
+  int count;
+  int capacity;
+  cb_node_t** table;
+} gvn_table_t;
+
+cb_node_t* gvn_get(gvn_table_t* table, cb_node_t* node);
+void gvn_remove(gvn_table_t* table, cb_node_t* node);
+
+void gvn_free_table(gvn_table_t* table);
