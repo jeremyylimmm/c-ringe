@@ -90,7 +90,7 @@ static cb_node_t* new_proj(cb_func_t* func, cb_node_kind_t kind, cb_node_t* inpu
 
 cb_node_start_result_t cb_node_start(cb_func_t* func) {
   return (cb_node_start_result_t) {
-    .start_ctrl = new_proj(func, CB_NODE_START_CTRL, get_start(func), CB_NODE_FLAG_IS_CFG),
+    .start_ctrl = new_proj(func, CB_NODE_START_CTRL, get_start(func), CB_NODE_FLAG_IS_CFG | CB_NODE_FLAG_IS_PINNED),
     .start_mem = new_proj(func, CB_NODE_START_MEM, get_start(func), CB_NODE_FLAG_PRODUCES_MEMORY)
   };
 }

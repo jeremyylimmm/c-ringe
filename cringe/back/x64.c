@@ -385,7 +385,7 @@ cb_func_t* cb_select_x64(cb_arena_t* arena, cb_func_t* in_func) {
 
   // go through all roots and patch inputs
 
-  for (int i = 0; i < vec_len(s.root_refs); ++i) {
+  for (int i = (int)vec_len(s.root_refs)-1; i >= 0; --i) {
     root_reference_t root_ref = s.root_refs[i];
     set_input(new_func, root_ref.user, s.map[root_ref.root->id], root_ref.index);
   }

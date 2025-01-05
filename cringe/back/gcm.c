@@ -396,6 +396,8 @@ static void early_sched(cb_block_t** map, cb_block_t** initial_map, func_walk_t 
 }
 
 static cb_block_t* find_lca(cb_block_t* a, cb_block_t* b) {
+  assert(b);
+
   if (a == NULL) {
     return b;
   }
