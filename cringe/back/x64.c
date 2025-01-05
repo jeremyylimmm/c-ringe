@@ -33,9 +33,9 @@ enum {
 
   NUM_ALLOCATABLE_PRS,
   PR_ESP = NUM_ALLOCATABLE_PRS,
-  //PR_EBP,
+  PR_EBP,
 
-  FIRST_VR = NUM_ALLOCATABLE_PRS,
+  FIRST_VR,
   NUM_PRS = FIRST_VR
 };
 
@@ -43,16 +43,16 @@ static char* pr_names32[NUM_PRS] = {
   "eax",
   "ecx",
   "edx",
-  //"esp",
-  //"ebp",
+  "esp",
+  "ebp",
 };
 
 static char* pr_names64[NUM_PRS] = {
   "rax",
   "rcx",
   "rdx",
-  //"rsp",
-  //"rbp",
+  "rsp",
+  "rbp",
 };
 
 typedef struct alloca_t alloca_t;
@@ -1105,6 +1105,24 @@ void cb_generate_x64(cb_func_t* func) {
   foreach_list(alloca_t, a, machine_func.alloca_head) {
     a->offset = stack_size;
     stack_size += 4;
+  }
+
+  if (stack_size > 0) {
+    machine_inst_t prologue[] = {
+      inst_push64(scratch.arena, PR_EBP),
+      inst_mov64_rr(scratch.arena, PR_EBP, PR_ESP),
+      inst_sub64_ri(scratch.arena, PR_ESP, stack_size)
+    };
+
+    prepend_n(machine_func.block_head, prologue, ARRAY_LENGTH(prologue));
+
+    machine_block_t* tail = machine_func.block_head;
+
+    while (tail->next) {
+      tail = tail->next;
+    }
+
+    insert_before_n(tail, inst_leave(scratch.arena), 1);
   }
 
   dump_func(&machine_func);

@@ -28,6 +28,10 @@ _ = jmp "(uint64_t)loc" : "machine_block_t* loc"; "jmp bb_{((machine_block_t*)in
 _ = push64 0; "push {R64(inst->reads[0]):s}"
 0 = pop64; "pop {R64(inst->writes[0]):s}"
 
+0 = mov64_rr 1; "mov {R64(inst->writes[0]):s}, {R64(inst->reads[0]):s}"
+0 = sub64_ri 0, "x" : "uint64_t x"; "sub {R64(inst->reads[0]):s}, {(uint64_t)inst->data:llu}"
+
+_ = leave; "leave"
 
 #nodes
 
