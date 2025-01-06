@@ -114,6 +114,7 @@ void gvn_remove(gvn_table_t* table, cb_node_t* node) {
 }
 
 void gvn_clear(gvn_table_t* table) {
+  table->count = 0;
   memset(table->table, 0, table->capacity * sizeof(table->table[0]));
 }
 
