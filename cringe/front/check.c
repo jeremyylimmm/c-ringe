@@ -357,6 +357,10 @@ static bool fn_check_RETURN(checker_t* c, parse_node_t* node) {
 static bool fn_check_LOCAL_DECL(checker_t* c, parse_node_t* node) {
   (void)node;
 
+  while (c->tree->nodes[c->i].kind != PARSE_NODE_LOCAL_NAME) {
+    c->i++;
+  }
+
   parse_node_t* name_node = &c->tree->nodes[c->i++];
   token_t name_token = get_token(c, name_node);
   string_view_t name = token_to_string_view(name_token);

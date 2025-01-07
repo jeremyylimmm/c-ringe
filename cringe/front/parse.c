@@ -381,7 +381,13 @@ static bool handle_STMT(parser_t* p, state_t state) {
       push(p, state_while());
     } break;
 
-    case TOKEN_KEYWORD_INT: {
+    case TOKEN_KEYWORD_CHAR:
+    case TOKEN_KEYWORD_SHORT:
+    case TOKEN_KEYWORD_SIGNED:
+    case TOKEN_KEYWORD_UNSIGNED:
+    case TOKEN_KEYWORD_INT:
+    case TOKEN_KEYWORD_LONG:
+    {
       push(p, state_semi());
       push(p, state_local_decl());
     } break;
@@ -495,26 +501,104 @@ static bool handle_WHILE_BODY(parser_t* p, state_t state) {
 static bool handle_LOCAL_DECL(parser_t* p, state_t state) {
   (void)state;
 
+  int ty_len = 0;
+  token_t ty[4];
+
+  #define GET() \
+    do {\
+      assert(ty_len < ARRAY_LENGTH(ty)); \
+      ty[ty_len++] = lex(p);\
+    } while (false)
+
   switch (peek(p).kind) {
     default:
       error(p, peek(p), "expected a typename for a local declaration");
       return false;
 
+    case TOKEN_KEYWORD_CHAR:
+      GET();
+      break;
+
+    case TOKEN_KEYWORD_SHORT:
+      GET();
+      switch (peek(p).kind) {
+        case TOKEN_KEYWORD_INT:
+          GET();
+          break;
+      }
+      break;
+    
+    case TOKEN_KEYWORD_SIGNED:
+    case TOKEN_KEYWORD_UNSIGNED:
+      GET();
+      switch (peek(p).kind) {
+        case TOKEN_KEYWORD_CHAR:
+          GET();
+          break;
+        case TOKEN_KEYWORD_SHORT:
+          GET();
+          switch (peek(p).kind) {
+            case TOKEN_KEYWORD_INT:
+              GET();
+              break;
+          }
+          break;
+        case TOKEN_KEYWORD_INT:
+          GET();
+          break;
+        case TOKEN_KEYWORD_LONG:
+          GET();
+          switch (peek(p).kind) {
+            case TOKEN_KEYWORD_INT:
+              GET();
+              break;
+            case TOKEN_KEYWORD_LONG:
+              GET();
+              switch (peek(p).kind) {
+                case TOKEN_KEYWORD_INT:
+                  GET();
+                  break;
+              }
+              break;
+          }
+          break;
+      }
+      break;
+
     case TOKEN_KEYWORD_INT:
+      GET();
+      break;
+
+    case TOKEN_KEYWORD_LONG:
+      GET();
+      switch (peek(p).kind) {
+        case TOKEN_KEYWORD_INT:
+          GET();
+          break;
+        case TOKEN_KEYWORD_LONG:
+          GET();
+          switch (peek(p).kind) {
+            case TOKEN_KEYWORD_INT:
+              GET();
+              break;
+          }
+          break;
+      }
       break;
   }
 
-  token_t ty = lex(p);
-
   if (peek(p).kind != TOKEN_IDENTIFIER) {
-    error(p, ty, "a local declaration requires that a name to follow this type");
+    error(p, ty[0], "a local declaration requires that a name to follow this type");
     return false;
   }
 
   token_t name_tok = lex(p);
 
-  node(p, PARSE_NODE_LOCAL_DECL, ty, 0);
-  node(p, PARSE_NODE_LOCAL_NAME, name_tok, 1);
+  for (int i = 0; i < ty_len; ++i) {
+    node(p, PARSE_NODE_LOCAL_DECL, ty[i], 0);
+  }
+
+  node(p, PARSE_NODE_LOCAL_NAME, name_tok, ty_len);
 
   return true;
 }
