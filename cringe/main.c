@@ -35,8 +35,6 @@ int main() {
   printf("Pre-analysis\n");
   sem_dump_unit(stdout, sem_unit);
 
-  /*
-
 
   bool success = true;
 
@@ -79,7 +77,6 @@ int main() {
   cb_dump_func(stdout, cb_func);
   cb_dump_func(stdout, x64_func);
   cb_generate_x64(x64_func);
-  */
 
   return 0;
 }

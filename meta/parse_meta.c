@@ -109,6 +109,10 @@ int main(int argc, char** argv) {
   param(complete_while, "sem_block_t*", "head_tail");
   param(complete_while, "sem_block_t*", "body_head");
 
+  state("function");
+
+  state("top_level");
+
   char* output_path = argv[1];
   FILE* file;
   if (fopen_s(&file, output_path, "w")) {

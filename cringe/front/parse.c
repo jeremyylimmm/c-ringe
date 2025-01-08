@@ -40,9 +40,23 @@ static sem_block_t* new_block(parser_t* p) {
   return block;
 }
 
-static void new_func(parser_t* p) {
+static char* token_to_string(parser_t* p, token_t tok) {
+  char* buf = arena_push(p->arena, (tok.length + 1) * sizeof(char));
+  memcpy(buf, tok.start, tok.length * sizeof(char));
+  buf[tok.length] = '\0';
+  return buf;
+}
+
+static void new_func(parser_t* p, token_t name) {
   sem_func_t* func = arena_type(p->arena, sem_func_t);
-  func->name = "main";
+  func->name = token_to_string(p, name);
+  func->next_value = 1;
+
+  vec_clear(p->definers);
+  vec_clear(p->value_stack);
+
+  definer_t null_definer = {0};
+  vec_put(p->definers, null_definer);
 
   if (p->cur_func) {
     p->cur_func->next = func;
@@ -53,6 +67,7 @@ static void new_func(parser_t* p) {
 
   p->cur_func = func;
 
+  p->cur_block = NULL;
   new_block(p);
 }
 
@@ -438,6 +453,44 @@ static bool handle_complete_while(parser_t* p, token_t while_tok, sem_value_t co
   return true;
 }
 
+static bool handle_function(parser_t* p) {
+  REQUIRE(p, TOKEN_KEYWORD_INT, "expected a function");
+
+  token_t name = peek(p);
+  REQUIRE(p, TOKEN_IDENTIFIER, "expected a function name");
+
+  token_t lparen = peek(p);
+  REQUIRE(p, '(', "expected a '()' parameter list");
+
+  if (peek(p).kind != ')') {
+    error(p, lparen, "no closing ')'");
+    return false;
+  }
+
+  lex(p);
+
+  new_func(p, name);
+  push_state(p, state_block());
+
+  return true;
+}
+
+static bool handle_top_level(parser_t* p) {
+  switch (peek(p).kind) {
+    default:
+      error(p, peek(p), "expected a struct, function, etc.");
+      return false;
+
+    case TOKEN_KEYWORD_INT:
+      push_state(p, state_top_level());
+      push_state(p, state_function());
+      return true;
+
+    case TOKEN_EOF:
+      return true;
+  }
+}
+
 sem_unit_t* parse_unit(arena_t* arena, lexer_t* lexer) {
   sem_unit_t* return_value = NULL;
 
@@ -447,8 +500,7 @@ sem_unit_t* parse_unit(arena_t* arena, lexer_t* lexer) {
     .unit = arena_type(arena, sem_unit_t),
   };
 
-  new_func(&p);
-  vec_put(p.state_stack, state_block());
+  vec_put(p.state_stack, state_top_level());
 
   while (vec_len(p.state_stack)) {
     parse_state_t state = vec_pop(p.state_stack);
