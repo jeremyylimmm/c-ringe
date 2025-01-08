@@ -124,6 +124,8 @@ static void scope_insert(parser_t* p, string_view_t name, sem_value_t value) {
     .name = name,
     .value = value
   };
+
+  scope->count++;
 }
 
 static void push_scope(parser_t* p) {
@@ -444,7 +446,12 @@ static bool handle_stmt(parser_t* p, bool dependent) {
       push_state(p, state_expr());
       return true;
 
+    case TOKEN_KEYWORD_CHAR:
+    case TOKEN_KEYWORD_SHORT:
+    case TOKEN_KEYWORD_SIGNED:
+    case TOKEN_KEYWORD_UNSIGNED:
     case TOKEN_KEYWORD_INT:
+    case TOKEN_KEYWORD_LONG:
       if (dependent) {
         error(p, peek(p), "a dependent statement must not be a declaration");
         return false;
@@ -675,8 +682,80 @@ static bool handle_top_level(parser_t* p) {
 }
 
 static bool handle_local_decl(parser_t* p) {
-  token_t int_tok = peek(p);
-  REQUIRE(p, TOKEN_KEYWORD_INT, "expected a local declaration");
+  int ty_len = 0;
+  token_t ty[4];
+
+  #define GET() \
+    do {\
+      assert(ty_len < ARRAY_LENGTH(ty)); \
+      ty[ty_len++] = lex(p); \
+    } while (false)
+
+  switch (peek(p).kind) {
+    default:
+      assert(false);
+      break;
+
+    case TOKEN_KEYWORD_CHAR:
+    case TOKEN_KEYWORD_INT:
+      GET();
+      break;
+
+    case TOKEN_KEYWORD_SHORT:
+      GET();
+      if (peek(p).kind == TOKEN_KEYWORD_INT) {
+        GET();
+      }
+      break;
+
+    case TOKEN_KEYWORD_SIGNED:
+    case TOKEN_KEYWORD_UNSIGNED:
+      GET();
+      switch (peek(p).kind) {
+        case TOKEN_KEYWORD_CHAR:
+        case TOKEN_KEYWORD_INT:
+          GET();
+          break;
+        case TOKEN_KEYWORD_SHORT:
+          GET();
+          if (peek(p).kind == TOKEN_KEYWORD_INT) {
+            GET();
+          }
+          break;
+        case TOKEN_KEYWORD_LONG:
+          GET();
+          switch (peek(p).kind) {
+            case TOKEN_KEYWORD_INT:
+              GET();
+              break;
+            case TOKEN_KEYWORD_LONG:
+              GET();
+              if (peek(p).kind == TOKEN_KEYWORD_INT) {
+                GET();
+              }
+              break;
+          }
+          break;
+      }
+      break;
+
+    case TOKEN_KEYWORD_LONG:
+      GET();
+      switch (peek(p).kind) {
+        case TOKEN_KEYWORD_INT:
+          GET();
+          break;
+        case TOKEN_KEYWORD_LONG:
+          GET();
+          if (peek(p).kind == TOKEN_KEYWORD_INT) {
+            GET();
+          }
+          break;
+      }
+      break;
+  }
+
+  #undef GET
 
   token_t name_tok = peek(p);
   REQUIRE(p, TOKEN_IDENTIFIER, "expected a local name");
@@ -689,7 +768,7 @@ static bool handle_local_decl(parser_t* p) {
     return false;
   }
 
-  make_inst(p, SEM_INST_ALLOCA, int_tok, true, 0, NULL);
+  make_inst(p, SEM_INST_ALLOCA, ty[0], true, 0, NULL);
   sem_value_t value = pop_value(p);
 
   scope_insert(p, name, value);
