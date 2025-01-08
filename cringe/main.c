@@ -26,14 +26,10 @@ int main() {
   source[source_length] = '\0';
 
   lexer_t lexer = lexer_init(path, source);
-  parse_tree_t* parse_tree = parse_unit(arena, &lexer);
+  sem_unit_t* sem_unit = parse_unit(arena, &lexer);
+  (void)sem_unit;
 
-  if (!parse_tree) {
-    return 1;
-  }
-
-  dump_parse_tree(stdout, parse_tree);
-  sem_unit_t* sem_unit = check_unit(arena, path, source, parse_tree);
+  /*
 
   if (!sem_unit) {
     return 1;
@@ -53,6 +49,7 @@ int main() {
   }
 
   printf("Post-analysis\n");
+
   sem_dump_unit(stdout, sem_unit);
 
   sem_func_t* main = NULL;
@@ -82,6 +79,7 @@ int main() {
   cb_dump_func(stdout, cb_func);
   cb_dump_func(stdout, x64_func);
   cb_generate_x64(x64_func);
+  */
 
   return 0;
 }
