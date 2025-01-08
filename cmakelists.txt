@@ -14,18 +14,30 @@ set(CMAKE_C_STANDARD_REQUIRED True)
 file(MAKE_DIRECTORY "generated")
 
 add_executable(lex_meta "meta/lex_meta.c")
+add_executable(parse_meta "meta/parse_meta.c")
 add_executable(x64_isa_meta "meta/x64_isa_meta.c")
 
 set(LEX_DFA_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/lex_dfa.h)
+set(TOKEN_KIND_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/token_kind.h)
+
+set(PARSE_OUTPUT ${CMAKE_CURRENT_LIST_DIR}/generated/parse_state.h)
+
 set(X64_ISA_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/x64_isa.h)
 set(X64_NODE_KIND_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/x64_node_kind.def)
-set(TOKEN_KIND_LOCATION ${CMAKE_CURRENT_LIST_DIR}/generated/token_kind.h)
 
 add_custom_command(
   OUTPUT ${LEX_DFA_LOCATION} ${TOKEN_KIND_LOCATION}
   COMMAND lex_meta ${LEX_DFA_LOCATION} ${TOKEN_KIND_LOCATION}
   DEPENDS lex_meta
   COMMENT "Generating lexer dfa."
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${PARSE_OUTPUT}
+  COMMAND parse_meta ${PARSE_OUTPUT}
+  DEPENDS parse_meta
+  COMMENT "Generating templated parser code."
   VERBATIM
 )
 
@@ -38,8 +50,9 @@ add_custom_command(
 )
 
 file(GLOB_RECURSE CRINGE_SOURCES "cringe/*.c" "cringe/*.h")
-add_executable(cringe ${CRINGE_SOURCES} ${LEX_DFA_LOCATION} ${TOKEN_KIND_LOCATION} ${X64_ISA_LOCATION} ${X64_NODE_KIND_LOCATION})
+add_executable(cringe ${CRINGE_SOURCES} ${LEX_DFA_LOCATION} ${TOKEN_KIND_LOCATION} ${PARSE_OUTPUT} ${X64_ISA_LOCATION} ${X64_NODE_KIND_LOCATION})
 
 target_include_directories(cringe PRIVATE "cringe" "generated")
 target_include_directories(lex_meta PRIVATE "cringe")
+target_include_directories(parse_meta PRIVATE "cringe")
 target_include_directories(x64_isa_meta PRIVATE "cringe")

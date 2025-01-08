@@ -27,9 +27,6 @@ int main() {
 
   lexer_t lexer = lexer_init(path, source);
   sem_unit_t* sem_unit = parse_unit(arena, &lexer);
-  (void)sem_unit;
-
-  /*
 
   if (!sem_unit) {
     return 1;
@@ -37,6 +34,9 @@ int main() {
 
   printf("Pre-analysis\n");
   sem_dump_unit(stdout, sem_unit);
+
+  /*
+
 
   bool success = true;
 
