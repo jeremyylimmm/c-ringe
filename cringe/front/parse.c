@@ -40,6 +40,22 @@ static sem_block_t* new_block(parser_t* p) {
   return block;
 }
 
+static void new_func(parser_t* p) {
+  sem_func_t* func = arena_type(p->arena, sem_func_t);
+  func->name = "main";
+
+  if (p->cur_func) {
+    p->cur_func->next = func;
+  }
+  else {
+    p->unit->funcs = func;
+  }
+
+  p->cur_func = func;
+
+  new_block(p);
+}
+
 static sem_value_t new_value(parser_t* p, sem_block_t* block, int inst) {
   assert(vec_len(p->definers) == p->cur_func->next_value);
 
@@ -55,6 +71,10 @@ static sem_value_t new_value(parser_t* p, sem_block_t* block, int inst) {
 
 static void push_value(parser_t* p, sem_value_t value) {
   vec_put(p->value_stack, value);
+}
+
+static sem_value_t pop_value(parser_t* p) {
+  return vec_pop(p->value_stack);
 }
 
 static void make_inst_in_block(parser_t* p, sem_block_t* block, sem_inst_kind_t kind, token_t token, bool has_out, int num_ins, void* data) {
@@ -239,6 +259,10 @@ static bool handle_stmt(parser_t* p) {
     case '{':
       push_state(p, state_block());
       return true;
+
+    case TOKEN_KEYWORD_IF:
+      push_state(p, state_if());
+      return true;
   }
 }
 
@@ -264,20 +288,81 @@ static bool handle_semi(parser_t* p) {
   return true;
 }
 
-static void new_func(parser_t* p) {
-  sem_func_t* func = arena_type(p->arena, sem_func_t);
-  func->name = "main";
+static bool handle_if(parser_t* p) {
+  token_t if_tok = peek(p);
+  REQUIRE(p, TOKEN_KEYWORD_IF, "expected an 'if' statement");
 
-  if (p->cur_func) {
-    p->cur_func->next = func;
+  token_t lparen = peek(p);
+  REQUIRE(p, '(', "expected a '()' condition");
+
+  push_state(p, state_if_body(if_tok, lparen));
+  push_state(p, state_expr());
+
+  return true;
+}
+
+static bool handle_if_body(parser_t* p, token_t if_tok, token_t lparen) {
+  if (peek(p).kind != ')') {
+    error(p, lparen, "no closing ')'");
+    return false;
+  }
+
+  lex(p);
+
+  sem_block_t* head_tail = p->cur_block;
+  sem_block_t* body_head = new_block(p);
+
+  push_state(p, state_if_else(if_tok, pop_value(p), head_tail, body_head));
+  push_state(p, state_block());
+
+  return true;
+}
+
+static void make_goto(parser_t* p, token_t tok, sem_block_t* from, sem_block_t* to) {
+  make_inst_in_block(p, from, SEM_INST_GOTO, tok, false, 0, to);
+}
+
+static void make_branch(parser_t* p, token_t tok, sem_value_t condition, sem_block_t* from, sem_block_t* true_block, sem_block_t* false_block) {
+  sem_block_t** locs = arena_array(p->arena, sem_block_t*, 2);
+  locs[0] = true_block;
+  locs[1] = false_block;
+
+  push_value(p, condition);
+
+  make_inst_in_block(p, from, SEM_INST_BRANCH, tok, false, 1, locs);
+}
+
+static bool handle_if_else(parser_t* p, token_t if_tok, sem_value_t condition, sem_block_t* head_tail, sem_block_t* body_head) {
+  sem_block_t* body_tail = p->cur_block;
+
+  if (peek(p).kind == TOKEN_KEYWORD_ELSE) {
+    lex(p);
+
+    sem_block_t* else_head = new_block(p);
+
+    make_branch(p, if_tok, condition, head_tail, body_head, else_head);
+
+    push_state(p, state_complete_if_else(if_tok, body_tail));
+    push_state(p, state_block());
   }
   else {
-    p->unit->funcs = func;
+    sem_block_t* end_head = new_block(p);
+
+    make_goto(p, if_tok, body_tail, end_head);
+    make_branch(p, if_tok, condition, head_tail, body_head, end_head);
   }
 
-  p->cur_func = func;
+  return true;
+}
 
-  new_block(p);
+static bool handle_complete_if_else(parser_t* p, token_t if_tok, sem_block_t* body_tail) {
+  sem_block_t* else_tail = p->cur_block;
+  sem_block_t* end_head = new_block(p);
+
+  make_goto(p, if_tok, body_tail, end_head);
+  make_goto(p, if_tok, else_tail, end_head);
+
+  return true;
 }
 
 sem_unit_t* parse_unit(arena_t* arena, lexer_t* lexer) {

@@ -78,6 +78,21 @@ int main(int argc, char** argv) {
   state("semi");
   state("stmt");
 
+  state("if");
+  state_t* if_body = state("if_body");
+  param(if_body, "token_t", "if_tok");
+  param(if_body, "token_t", "lparen");
+
+  state_t* if_else = state("if_else");
+  param(if_else, "token_t", "if_tok");
+  param(if_else, "sem_value_t", "condition");
+  param(if_else, "sem_block_t*", "head_tail");
+  param(if_else, "sem_block_t*", "body_head");
+
+  state_t* complete_if_else = state("complete_if_else");
+  param(complete_if_else, "token_t", "if_tok");
+  param(complete_if_else, "sem_block_t*", "body_tail");
+
   char* output_path = argv[1];
   FILE* file;
   if (fopen_s(&file, output_path, "w")) {
