@@ -71,6 +71,9 @@ int main(int argc, char** argv) {
   param(complete, "int", "num_ins");
   param(complete, "void*", "data");
 
+  state_t* complete_assign = state("complete_assign");
+  param(complete_assign, "token_t", "op");
+
   state("block");
   state_t* block_stmt = state("block_stmt");
   param(block_stmt, "token_t", "lbrace");

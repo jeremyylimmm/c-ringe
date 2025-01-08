@@ -50,6 +50,7 @@ struct cb_use_t {
 typedef struct {
   cb_arena_t* arena;
   int next_id;
+  int next_alloca_id;
 
   cb_node_t *start, *end;
 } cb_func_t;

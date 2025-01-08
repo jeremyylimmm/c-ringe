@@ -44,6 +44,10 @@ typedef struct {
 } constant_data_t;
 
 typedef struct {
+  int id;
+} alloca_data_t;
+
+typedef struct {
   size_t len;
   cb_node_t** nodes;
 } func_walk_t;

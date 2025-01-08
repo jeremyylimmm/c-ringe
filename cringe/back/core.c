@@ -121,7 +121,9 @@ cb_node_t* cb_node_null(cb_func_t* func) {
 }
 
 cb_node_t* cb_node_alloca(cb_func_t* func) {
-  return new_leaf(func, CB_NODE_ALLOCA, 0, CB_NODE_FLAG_NONE);
+  cb_node_t* node = new_leaf(func, CB_NODE_ALLOCA, sizeof(alloca_data_t), CB_NODE_FLAG_NONE);
+  DATA(node, alloca_data_t)->id = func->next_alloca_id++;
+  return node;
 }
 
 cb_node_branch_result_t cb_node_branch(cb_func_t* func, cb_node_t* ctrl, cb_node_t* predicate) {

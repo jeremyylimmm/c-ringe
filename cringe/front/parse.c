@@ -118,12 +118,22 @@ static void scope_insert(parser_t* p, string_view_t name, sem_value_t value) {
   int idx = _scope_find(scope, name);
 
   assert(idx != -1);
-  assert(scope->table[idx].value);
+  assert(!scope->table[idx].value);
 
   scope->table[idx] = (scope_entry_t) {
     .name = name,
     .value = value
   };
+}
+
+static void push_scope(parser_t* p) {
+  scope_t scope = {0};
+  vec_put(p->scope_stack, scope);
+}
+
+static void pop_scope(parser_t* p) {
+  scope_t scope = vec_pop(p->scope_stack);
+  scope_free(&scope);
 }
 
 static sem_block_t* new_block(parser_t* p) {
@@ -286,6 +296,13 @@ static bool handle_expr(parser_t* p) {
   return true;
 }
 
+static string_view_t tok_to_string_view(token_t tok) {
+  return (string_view_t) {
+    .len = tok.length,
+    .str = tok.start
+  };
+}
+
 static bool handle_primary(parser_t* p) {
   switch (peek(p).kind) {
     default:
@@ -306,6 +323,22 @@ static bool handle_primary(parser_t* p) {
 
       return true;
     }
+
+    case TOKEN_IDENTIFIER: {
+      token_t name_tok = lex(p);
+      string_view_t name = tok_to_string_view(name_tok);
+      sem_value_t value = scope_find(p, name, false);
+
+      if (!value) {
+        error(p, name_tok, "symbol does not exist");
+        return false;
+      }
+
+      push_value(p, value);
+      make_inst(p, SEM_INST_LOAD, name_tok, true, 1, NULL);
+
+      return true;
+    }
   } 
 }
 
@@ -315,7 +348,7 @@ static bool handle_binary(parser_t* p, int prec) {
   return true;
 }
 
-static int bin_prec(token_t tok) {
+static int bin_prec(token_t tok, bool is_source) {
   switch (tok.kind) {
     case '*':
     case '/':
@@ -323,6 +356,8 @@ static int bin_prec(token_t tok) {
     case '+':
     case '-':
       return 10;
+    case '=':
+      return 7 - (is_source ? 1 : 0);
     default:
       return 0;
   }
@@ -338,6 +373,8 @@ static sem_inst_kind_t bin_kind(token_t tok) {
       return SEM_INST_ADD;
     case '-':
       return SEM_INST_SUB;
+    case '=':
+      return SEM_INST_STORE;
     default:
       assert(false);
       return SEM_INST_UNINITIALIZED;
@@ -345,11 +382,18 @@ static sem_inst_kind_t bin_kind(token_t tok) {
 }
 
 static bool handle_binary_infix(parser_t* p, int prec) {
-  if (bin_prec(peek(p)) > prec) {
+  if (bin_prec(peek(p), false) > prec) {
     token_t op = lex(p);
     push_state(p, state_binary_infix(prec));
-    push_state(p, state_complete(bin_kind(op), op, true, 2, NULL));
-    push_state(p, state_binary(bin_prec(op)));
+
+    if (op.kind == '=') {
+      push_state(p, state_complete_assign(op)); // special case as needs to contort the value stack
+    }
+    else {
+      push_state(p, state_complete(bin_kind(op), op, true, 2, NULL));
+    }
+
+    push_state(p, state_binary(bin_prec(op, true)));
   }
 
   return true;
@@ -360,10 +404,36 @@ static bool handle_complete(parser_t* p, sem_inst_kind_t kind, token_t tok, bool
   return true;
 }
 
+static bool handle_complete_assign(parser_t* p, token_t op) {
+  sem_value_t right = pop_value(p);
+  sem_value_t left  = pop_value(p);
+
+  definer_t* definer = p->definers + left;
+  sem_inst_t* inst = definer->block->code + definer->inst;
+
+  if (inst->kind != SEM_INST_LOAD) {
+    error(p, inst->token, "cannot assign this value as it is not an lvalue");
+    return false;
+  }
+
+  inst->flags |= SEM_INST_FLAG_HIDE_FROM_DUMP;
+  sem_value_t address = inst->ins[0];
+
+  push_value(p, address);
+  push_value(p, right);
+
+  make_inst(p, SEM_INST_STORE, op, false, 2, NULL);
+
+  push_value(p, right);
+
+  return true;
+}
+
 static bool handle_block(parser_t* p) {
   token_t lbrace = peek(p);
   REQUIRE(p, '{', "expected a '{' block");
   push_state(p, state_block_stmt(lbrace));
+  push_scope(p);
   return true;
 }
 
@@ -421,6 +491,7 @@ static bool handle_block_stmt(parser_t* p, token_t lbrace) {
       return true;
 
     case '}':
+      pop_scope(p);
       lex(p);
       return true;
 
@@ -604,13 +675,24 @@ static bool handle_top_level(parser_t* p) {
 }
 
 static bool handle_local_decl(parser_t* p) {
+  token_t int_tok = peek(p);
   REQUIRE(p, TOKEN_KEYWORD_INT, "expected a local declaration");
 
-  token_t name = peek(p);
+  token_t name_tok = peek(p);
   REQUIRE(p, TOKEN_IDENTIFIER, "expected a local name");
   REQUIRE(p, ';', "expected a ';'");
 
-  (void)name;
+  string_view_t name = tok_to_string_view(name_tok);
+
+  if (scope_find(p, name, true)) {
+    error(p, name_tok, "name clashes with an existing symbol");
+    return false;
+  }
+
+  make_inst(p, SEM_INST_ALLOCA, int_tok, true, 0, NULL);
+  sem_value_t value = pop_value(p);
+
+  scope_insert(p, name, value);
 
   return true;
 }
