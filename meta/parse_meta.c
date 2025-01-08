@@ -93,6 +93,22 @@ int main(int argc, char** argv) {
   param(complete_if_else, "token_t", "if_tok");
   param(complete_if_else, "sem_block_t*", "body_tail");
 
+  state_t* complete_return = state("complete_return");
+  param(complete_return, "token_t", "return_tok");
+
+  state("while");
+  state_t* while_body = state("while_body");
+  param(while_body, "token_t", "while_tok");
+  param(while_body, "token_t", "lparen");
+  param(while_body, "sem_block_t*", "head_head");
+
+  state_t* complete_while = state("complete_while");
+  param(complete_while, "token_t", "while_tok");
+  param(complete_while, "sem_value_t", "condition");
+  param(complete_while, "sem_block_t*", "head_head");
+  param(complete_while, "sem_block_t*", "head_tail");
+  param(complete_while, "sem_block_t*", "body_head");
+
   char* output_path = argv[1];
   FILE* file;
   if (fopen_s(&file, output_path, "w")) {

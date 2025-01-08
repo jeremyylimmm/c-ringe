@@ -263,6 +263,26 @@ static bool handle_stmt(parser_t* p) {
     case TOKEN_KEYWORD_IF:
       push_state(p, state_if());
       return true;
+
+    case TOKEN_KEYWORD_WHILE:
+      push_state(p, state_while());
+      return true;
+
+    case TOKEN_KEYWORD_RETURN: {
+      token_t return_tok = lex(p);
+
+      if (peek(p).kind != ';') {
+        push_state(p, state_complete_return(return_tok));
+        push_state(p, state_semi());
+        push_state(p, state_expr());
+      }
+      else {
+        lex(p);
+        make_inst(p, SEM_INST_RETURN, return_tok, false, 0, NULL);
+        new_block(p);
+      }
+      return true;
+    }
   }
 }
 
@@ -313,7 +333,7 @@ static bool handle_if_body(parser_t* p, token_t if_tok, token_t lparen) {
   sem_block_t* body_head = new_block(p);
 
   push_state(p, state_if_else(if_tok, pop_value(p), head_tail, body_head));
-  push_state(p, state_block());
+  push_state(p, state_stmt());
 
   return true;
 }
@@ -343,7 +363,7 @@ static bool handle_if_else(parser_t* p, token_t if_tok, sem_value_t condition, s
     make_branch(p, if_tok, condition, head_tail, body_head, else_head);
 
     push_state(p, state_complete_if_else(if_tok, body_tail));
-    push_state(p, state_block());
+    push_state(p, state_stmt());
   }
   else {
     sem_block_t* end_head = new_block(p);
@@ -361,6 +381,59 @@ static bool handle_complete_if_else(parser_t* p, token_t if_tok, sem_block_t* bo
 
   make_goto(p, if_tok, body_tail, end_head);
   make_goto(p, if_tok, else_tail, end_head);
+
+  return true;
+}
+
+static bool handle_complete_return(parser_t* p, token_t return_tok) {
+  make_inst(p, SEM_INST_RETURN, return_tok, false, 1, NULL);
+  new_block(p);
+  return true;
+}
+
+static bool handle_while(parser_t* p) {
+  token_t while_tok = peek(p);
+  REQUIRE(p, TOKEN_KEYWORD_WHILE, "expected a 'while' loop");
+
+  token_t lparen = peek(p);
+  REQUIRE(p, '(', "expected a '()' condition");
+
+  sem_block_t* before = p->cur_block;
+  sem_block_t* head_head = new_block(p);
+
+  make_goto(p, while_tok, before, head_head);
+
+  push_state(p, state_while_body(while_tok, lparen, head_head));
+  push_state(p, state_expr());
+
+  return true;
+}
+
+static bool handle_while_body(parser_t* p, token_t while_tok, token_t lparen, sem_block_t* head_head) {
+  if (peek(p).kind != ')') {
+    error(p, lparen, "no closing ')'");
+    return false;
+  }
+
+  lex(p);
+
+  sem_value_t condition = pop_value(p);
+
+  sem_block_t* head_tail = p->cur_block;
+  sem_block_t* body_head = new_block(p);
+
+  push_state(p, state_complete_while(while_tok, condition, head_head, head_tail, body_head));
+  push_state(p, state_stmt());
+
+  return true;
+}
+
+static bool handle_complete_while(parser_t* p, token_t while_tok, sem_value_t condition, sem_block_t* head_head, sem_block_t* head_tail, sem_block_t* body_head) {
+  sem_block_t* body_tail = p->cur_block;
+  sem_block_t* end = new_block(p);
+
+  make_goto(p, while_tok, body_tail, head_head);
+  make_branch(p, while_tok, condition, head_tail, body_head, end);
 
   return true;
 }
