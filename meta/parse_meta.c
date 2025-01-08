@@ -76,6 +76,7 @@ int main(int argc, char** argv) {
   param(block_stmt, "token_t", "lbrace");
 
   state("semi");
+  state("stmt");
 
   char* output_path = argv[1];
   FILE* file;

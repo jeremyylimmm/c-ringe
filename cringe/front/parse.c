@@ -229,12 +229,24 @@ static bool handle_block(parser_t* p) {
   return true;
 }
 
+static bool handle_stmt(parser_t* p) {
+  switch (peek(p).kind) {
+    default:
+      push_state(p, state_semi());
+      push_state(p, state_expr());
+      return true;
+
+    case '{':
+      push_state(p, state_block());
+      return true;
+  }
+}
+
 static bool handle_block_stmt(parser_t* p, token_t lbrace) {
   switch (peek(p).kind) {
     default:
       push_state(p, state_block_stmt(lbrace));
-      push_state(p, state_semi());
-      push_state(p, state_expr());
+      push_state(p, state_stmt());
       return true;
 
     case '}':
