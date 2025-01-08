@@ -244,7 +244,18 @@ static cb_block_t* build_cfg(arena_t* arena, cb_block_t** block_map, cb_func_t* 
 
       vec_put(stack, cfg_build_item(true, item.parent_block, node));
 
+      cb_node_t* branch_projs[2] = {0};
+
       foreach_list(cb_use_t, use, node->uses) {
+        switch (use->node->kind) { // force the order of these
+          case CB_NODE_BRANCH_TRUE:
+            branch_projs[0] = use->node;
+            continue;
+          case CB_NODE_BRANCH_FALSE:
+            branch_projs[1] = use->node;
+            continue;
+        }
+
         bool is_cfg = (use->node->flags & CB_NODE_FLAG_IS_CFG) != 0;
         bool is_pinned = (use->node->flags & CB_NODE_FLAG_IS_PINNED) != 0;
 
@@ -254,6 +265,12 @@ static cb_block_t* build_cfg(arena_t* arena, cb_block_t** block_map, cb_func_t* 
 
         assert(use->index == 0 || use->node->kind == CB_NODE_REGION);
         vec_put(stack, cfg_build_item(false, block, use->node));
+      }
+
+      if (branch_projs[0] || branch_projs[1]) {
+        assert(branch_projs[0] && branch_projs[1]);
+        vec_put(stack, cfg_build_item(false, block, branch_projs[0]));
+        vec_put(stack, cfg_build_item(false, block, branch_projs[1]));
       }
     }
     else {

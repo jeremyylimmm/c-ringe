@@ -1128,12 +1128,7 @@ void cb_generate_x64(cb_func_t* func) {
 
     prepend_n(machine_func.block_head, prologue, ARRAY_LENGTH(prologue));
 
-    machine_block_t* tail = machine_func.block_head;
-
-    while (tail->next) {
-      tail = tail->next;
-    }
-
+    machine_block_t* tail = block_map[gcm.map[func->end->id]->id];
     insert_before_n(tail, inst_leave(scratch.arena), 1);
   }
 

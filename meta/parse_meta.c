@@ -76,7 +76,8 @@ int main(int argc, char** argv) {
   param(block_stmt, "token_t", "lbrace");
 
   state("semi");
-  state("stmt");
+  state_t* stmt = state("stmt");
+  param(stmt, "bool", "dependent");
 
   state("if");
   state_t* if_body = state("if_body");
@@ -109,8 +110,9 @@ int main(int argc, char** argv) {
   param(complete_while, "sem_block_t*", "head_tail");
   param(complete_while, "sem_block_t*", "body_head");
 
-  state("function");
+  state("local_decl");
 
+  state("function");
   state("top_level");
 
   char* output_path = argv[1];

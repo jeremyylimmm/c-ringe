@@ -1,4 +1,8 @@
+#include <stdlib.h>
+
 #include "front.h"
+
+#define MAX_SYMBOL_TABLE_LOAD_FACTOR 0.5f
 
 typedef struct parser_t parser_t;
 
@@ -9,6 +13,17 @@ typedef struct {
   int inst;
 } definer_t;
 
+typedef struct {
+  string_view_t name;
+  sem_value_t value;
+} scope_entry_t;
+
+typedef struct {
+  int capacity;
+  int count;
+  scope_entry_t* table;
+} scope_t;
+
 struct parser_t {
   arena_t* arena;
 
@@ -16,6 +31,7 @@ struct parser_t {
   vec_t(parse_state_t) state_stack;
   vec_t(sem_value_t) value_stack;
   vec_t(definer_t) definers;
+  vec_t(scope_t) scope_stack;
 
   token_t next_token;
 
@@ -24,6 +40,91 @@ struct parser_t {
   sem_func_t* cur_func;
   sem_block_t* cur_block;
 };
+
+static int _scope_find(scope_t* scope, string_view_t name) {
+  if (!scope->capacity) {
+    return -1;
+  }
+
+  int i = fnv1a(name.str, name.len * sizeof(name.str[0])) % scope->capacity;
+
+  for (int j = 0; j < scope->capacity; ++j) {
+    scope_entry_t* e = scope->table + i;
+
+    if (!e->value) {
+      return i;
+    }
+
+    if (string_view_cmp(e->name, name)) {
+      return i;
+    }
+
+    i = (i + 1) % scope->capacity;
+  }
+
+  return -1;
+}
+
+static sem_value_t scope_find(parser_t* p, string_view_t name, bool restrict_top_level) {
+  for (int level = (int)vec_len(p->scope_stack)-1; level >= 0; --level) {
+    scope_t* scope = p->scope_stack + level;
+
+    int idx = _scope_find(scope, name);
+
+    if (idx == -1 || !scope->table[idx].value) {
+    }
+    else {
+      return scope->table[idx].value;
+    }
+
+    if (restrict_top_level) {
+      return 0;
+    }
+  }
+
+  return 0;
+}
+
+static void scope_free(scope_t* scope) {
+  free(scope->table);
+}
+
+static void scope_insert(parser_t* p, string_view_t name, sem_value_t value) {
+  scope_t* scope = &vec_back(p->scope_stack);
+
+  if (!scope->capacity || (float)scope->count > (float)scope->capacity * MAX_SYMBOL_TABLE_LOAD_FACTOR) {
+    int new_capacity = scope->capacity ? scope->capacity * 2 : 8;
+
+    scope_t new_scope = {
+      .capacity = new_capacity,
+      .table = calloc(new_capacity, sizeof(scope->table[0]))
+    };
+
+    for (int i = 0; i < scope->capacity; ++i) {
+      scope_entry_t* e = scope->table + i;
+
+      if (e->value) {
+        int idx = _scope_find(&new_scope, e->name);
+        assert(idx != -1);
+        new_scope.table[idx] = *e;
+        new_scope.count++;
+      }
+    }
+
+    scope_free(scope);
+    *scope = new_scope;
+  }
+
+  int idx = _scope_find(scope, name);
+
+  assert(idx != -1);
+  assert(scope->table[idx].value);
+
+  scope->table[idx] = (scope_entry_t) {
+    .name = name,
+    .value = value
+  };
+}
 
 static sem_block_t* new_block(parser_t* p) {
   sem_block_t* block = arena_type(p->arena, sem_block_t);
@@ -54,6 +155,8 @@ static void new_func(parser_t* p, token_t name) {
 
   vec_clear(p->definers);
   vec_clear(p->value_stack);
+
+  assert(vec_len(p->scope_stack) == 0);
 
   definer_t null_definer = {0};
   vec_put(p->definers, null_definer);
@@ -264,11 +367,20 @@ static bool handle_block(parser_t* p) {
   return true;
 }
 
-static bool handle_stmt(parser_t* p) {
+static bool handle_stmt(parser_t* p, bool dependent) {
   switch (peek(p).kind) {
     default:
       push_state(p, state_semi());
       push_state(p, state_expr());
+      return true;
+
+    case TOKEN_KEYWORD_INT:
+      if (dependent) {
+        error(p, peek(p), "a dependent statement must not be a declaration");
+        return false;
+      }
+    
+      push_state(p, state_local_decl());
       return true;
 
     case '{':
@@ -305,7 +417,7 @@ static bool handle_block_stmt(parser_t* p, token_t lbrace) {
   switch (peek(p).kind) {
     default:
       push_state(p, state_block_stmt(lbrace));
-      push_state(p, state_stmt());
+      push_state(p, state_stmt(false));
       return true;
 
     case '}':
@@ -348,7 +460,7 @@ static bool handle_if_body(parser_t* p, token_t if_tok, token_t lparen) {
   sem_block_t* body_head = new_block(p);
 
   push_state(p, state_if_else(if_tok, pop_value(p), head_tail, body_head));
-  push_state(p, state_stmt());
+  push_state(p, state_stmt(true));
 
   return true;
 }
@@ -378,7 +490,7 @@ static bool handle_if_else(parser_t* p, token_t if_tok, sem_value_t condition, s
     make_branch(p, if_tok, condition, head_tail, body_head, else_head);
 
     push_state(p, state_complete_if_else(if_tok, body_tail));
-    push_state(p, state_stmt());
+    push_state(p, state_stmt(true));
   }
   else {
     sem_block_t* end_head = new_block(p);
@@ -438,7 +550,7 @@ static bool handle_while_body(parser_t* p, token_t while_tok, token_t lparen, se
   sem_block_t* body_head = new_block(p);
 
   push_state(p, state_complete_while(while_tok, condition, head_head, head_tail, body_head));
-  push_state(p, state_stmt());
+  push_state(p, state_stmt(true));
 
   return true;
 }
@@ -491,6 +603,18 @@ static bool handle_top_level(parser_t* p) {
   }
 }
 
+static bool handle_local_decl(parser_t* p) {
+  REQUIRE(p, TOKEN_KEYWORD_INT, "expected a local declaration");
+
+  token_t name = peek(p);
+  REQUIRE(p, TOKEN_IDENTIFIER, "expected a local name");
+  REQUIRE(p, ';', "expected a ';'");
+
+  (void)name;
+
+  return true;
+}
+
 sem_unit_t* parse_unit(arena_t* arena, lexer_t* lexer) {
   sem_unit_t* return_value = NULL;
 
@@ -516,5 +640,6 @@ sem_unit_t* parse_unit(arena_t* arena, lexer_t* lexer) {
   vec_free(p.state_stack);
   vec_free(p.value_stack);
   vec_free(p.definers);
+  vec_free(p.scope_stack);
   return return_value;
 }
