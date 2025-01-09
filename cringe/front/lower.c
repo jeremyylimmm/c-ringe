@@ -74,6 +74,11 @@ static cb_node_t* lower_DIV(lower_context_t* ctx, sem_inst_t* inst) {
   return cb_node_sdiv(ctx->func, IN(0), IN(1));
 }
 
+static cb_node_t* lower_CAST(lower_context_t* ctx, sem_inst_t* inst) {
+  (void)ctx;
+  return IN(0);
+}
+
 static cb_node_t* lower_LOAD(lower_context_t* ctx, sem_inst_t* inst) {
   return cb_node_load(ctx->func, ctx->ctrl, ctx->mem, IN(0));
 }
@@ -198,4 +203,4 @@ cb_func_t* sem_lower(arena_t* arena, sem_func_t* sem_func) {
   scratch_release(&scratch);
 
   return func;
-};
+}

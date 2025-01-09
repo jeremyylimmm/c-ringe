@@ -9,11 +9,6 @@ typedef struct parser_t parser_t;
 #include "parse_state.h"
 
 typedef struct {
-  sem_block_t* block;
-  int inst;
-} definer_t;
-
-typedef struct {
   string_view_t name;
   sem_value_t value;
 } scope_entry_t;
@@ -30,7 +25,7 @@ struct parser_t {
   lexer_t* lexer;
   vec_t(parse_state_t) state_stack;
   vec_t(sem_value_t) value_stack;
-  vec_t(definer_t) definers;
+  vec_t(sem_definer_t) definers;
   vec_t(scope_t) scope_stack;
 
   token_t next_token;
@@ -170,7 +165,7 @@ static void new_func(parser_t* p, token_t name) {
 
   assert(vec_len(p->scope_stack) == 0);
 
-  definer_t null_definer = {0};
+  sem_definer_t null_definer = {0};
   vec_put(p->definers, null_definer);
 
   if (p->cur_func) {
@@ -186,12 +181,13 @@ static void new_func(parser_t* p, token_t name) {
   new_block(p);
 }
 
-static sem_value_t new_value(parser_t* p, sem_block_t* block, int inst) {
+static sem_value_t new_value(parser_t* p, sem_block_t* block, int inst, sem_type_t* ty) {
   assert(vec_len(p->definers) == p->cur_func->next_value);
 
-  definer_t definer = {
+  sem_definer_t definer = {
     .block = block,
-    .inst = inst
+    .inst = inst,
+    .ty = ty
   };
 
   vec_put(p->definers, definer);
@@ -207,8 +203,15 @@ static sem_value_t pop_value(parser_t* p) {
   return vec_pop(p->value_stack);
 }
 
-static void make_inst_in_block(parser_t* p, sem_block_t* block, sem_inst_kind_t kind, token_t token, bool has_out, int num_ins, void* data) {
+static sem_value_t peek_value(parser_t* p, int offset) {
+  int idx = (int)vec_len(p->value_stack)-1-offset;
+  assert(idx >= 0);
+  return p->value_stack[idx];
+}
+
+static void make_inst_in_block(parser_t* p, sem_block_t* block, sem_inst_kind_t kind, token_t token, sem_type_t* ty, int num_ins, void* data) {
   assert(num_ins <= SEM_MAX_INS);
+  assert(ty);
 
   sem_inst_t inst = {
     .kind = kind,
@@ -221,8 +224,8 @@ static void make_inst_in_block(parser_t* p, sem_block_t* block, sem_inst_kind_t 
     inst.ins[i] = vec_pop(p->value_stack);
   }
 
-  if (has_out) {
-    sem_value_t value = new_value(p, block, (int)vec_len(block->code));
+  if (ty != p->unit->ty_void) {
+    sem_value_t value = new_value(p, block, (int)vec_len(block->code), ty);
     push_value(p, value);
     inst.out = value;
   }
@@ -239,8 +242,8 @@ static void make_inst_in_block(parser_t* p, sem_block_t* block, sem_inst_kind_t 
   }
 }
 
-static void make_inst(parser_t* p, sem_inst_kind_t kind, token_t token, bool has_out, int num_ins, void* data) {
-  make_inst_in_block(p, p->cur_block, kind, token, has_out, num_ins, data);
+static void make_inst(parser_t* p, sem_inst_kind_t kind, token_t token, sem_type_t* ty, int num_ins, void* data) {
+  make_inst_in_block(p, p->cur_block, kind, token, ty, num_ins, data);
 }
 
 static token_t lex(parser_t* p) {
@@ -321,7 +324,7 @@ static bool handle_primary(parser_t* p) {
         value += tok.start[i] - '0';
       }
 
-      make_inst(p, SEM_INST_INT_CONST, tok, true, 0, (void*)value);
+      make_inst(p, SEM_INST_INT_CONST, tok, p->unit->ty_int, 0, (void*)value);
 
       return true;
     }
@@ -337,7 +340,7 @@ static bool handle_primary(parser_t* p) {
       }
 
       push_value(p, value);
-      make_inst(p, SEM_INST_LOAD, name_tok, true, 1, NULL);
+      make_inst(p, SEM_INST_LOAD, name_tok, p->definers[value].ty, 1, NULL);
 
       return true;
     }
@@ -387,48 +390,85 @@ static bool handle_binary_infix(parser_t* p, int prec) {
   if (bin_prec(peek(p), false) > prec) {
     token_t op = lex(p);
     push_state(p, state_binary_infix(prec));
-
-    if (op.kind == '=') {
-      push_state(p, state_complete_assign(op)); // special case as needs to contort the value stack
-    }
-    else {
-      push_state(p, state_complete(bin_kind(op), op, true, 2, NULL));
-    }
-
+    push_state(p, state_complete_binary(op));
     push_state(p, state_binary(bin_prec(op, true)));
   }
 
   return true;
 }
 
-static bool handle_complete(parser_t* p, sem_inst_kind_t kind, token_t tok, bool has_out, int num_ins, void* data) {
-  make_inst(p, kind, tok, has_out, num_ins, data);
+static bool handle_complete(parser_t* p, sem_inst_kind_t kind, token_t tok, sem_type_t* ty, int num_ins, void* data) {
+  make_inst(p, kind, tok, ty, num_ins, data);
   return true;
 }
 
-static bool handle_complete_assign(parser_t* p, token_t op) {
-  sem_value_t right = pop_value(p);
-  sem_value_t left  = pop_value(p);
-
-  definer_t* definer = p->definers + left;
-  sem_inst_t* inst = definer->block->code + definer->inst;
-
-  if (inst->kind != SEM_INST_LOAD) {
-    error(p, inst->token, "cannot assign this value as it is not an lvalue");
-    return false;
+static sem_type_t* larger_type(sem_type_t* a, sem_type_t* b) {
+  if (a->size == b->size) {
+    if (a->flags & SEM_TYPE_FLAG_SIGNED) {
+      return a;
+    }
+    else {
+      return b;
+    }
   }
+  else {
+    return a->size > b->size ? a : b;
+  }
+}
 
-  inst->flags |= SEM_INST_FLAG_HIDE_FROM_DUMP;
-  sem_value_t address = inst->ins[0];
+static bool handle_complete_binary(parser_t* p, token_t op) {
+  if (op.kind == '=') {
+    sem_value_t right = pop_value(p);
+    sem_value_t left  = pop_value(p);
 
-  push_value(p, address);
-  push_value(p, right);
+    sem_definer_t* definer = p->definers + left;
+    sem_inst_t* inst = definer->block->code + definer->inst;
 
-  make_inst(p, SEM_INST_STORE, op, false, 2, NULL);
+    if (inst->kind != SEM_INST_LOAD) {
+      error(p, inst->token, "cannot assign this value as it is not an lvalue");
+      return false;
+    }
 
-  push_value(p, right);
+    inst->flags |= SEM_INST_FLAG_HIDE_FROM_DUMP;
+    sem_value_t address = inst->ins[0];
 
-  return true;
+    push_value(p, address);
+    push_value(p, right);
+
+    make_inst(p, SEM_INST_STORE, op, p->unit->ty_void, 2, NULL);
+
+    push_value(p, right);
+
+    return true;
+  }
+  else {
+    sem_value_t right = pop_value(p);
+    sem_value_t left  = pop_value(p);
+
+    sem_type_t* ty_left  = p->definers[left].ty;
+    sem_type_t* ty_right = p->definers[right].ty;
+
+    sem_type_t* ty = ty_left;
+
+    if (ty_left->alias != ty_right->alias) {
+      ty = larger_type(ty_left, ty_right);
+
+      push_value(p, left);
+
+      if (ty != ty_left) {
+        make_inst(p, SEM_INST_CAST, op, ty, 1, NULL);
+      }
+
+      push_value(p, right);
+
+      if (ty != ty_right) {
+        make_inst(p, SEM_INST_CAST, op, ty, 1, NULL);
+      }
+    }
+
+    make_inst(p, bin_kind(op), op, ty, 2, NULL);
+    return true;
+  }
 }
 
 static bool handle_block(parser_t* p) {
@@ -482,7 +522,7 @@ static bool handle_stmt(parser_t* p, bool dependent) {
       }
       else {
         lex(p);
-        make_inst(p, SEM_INST_RETURN, return_tok, false, 0, NULL);
+        make_inst(p, SEM_INST_RETURN, return_tok, p->unit->ty_void, 0, NULL);
         new_block(p);
       }
       return true;
@@ -544,7 +584,7 @@ static bool handle_if_body(parser_t* p, token_t if_tok, token_t lparen) {
 }
 
 static void make_goto(parser_t* p, token_t tok, sem_block_t* from, sem_block_t* to) {
-  make_inst_in_block(p, from, SEM_INST_GOTO, tok, false, 0, to);
+  make_inst_in_block(p, from, SEM_INST_GOTO, tok, p->unit->ty_void, 0, to);
 }
 
 static void make_branch(parser_t* p, token_t tok, sem_value_t condition, sem_block_t* from, sem_block_t* true_block, sem_block_t* false_block) {
@@ -554,7 +594,7 @@ static void make_branch(parser_t* p, token_t tok, sem_value_t condition, sem_blo
 
   push_value(p, condition);
 
-  make_inst_in_block(p, from, SEM_INST_BRANCH, tok, false, 1, locs);
+  make_inst_in_block(p, from, SEM_INST_BRANCH, tok, p->unit->ty_void, 1, locs);
 }
 
 static bool handle_if_else(parser_t* p, token_t if_tok, sem_value_t condition, sem_block_t* head_tail, sem_block_t* body_head) {
@@ -591,7 +631,7 @@ static bool handle_complete_if_else(parser_t* p, token_t if_tok, sem_block_t* bo
 }
 
 static bool handle_complete_return(parser_t* p, token_t return_tok) {
-  make_inst(p, SEM_INST_RETURN, return_tok, false, 1, NULL);
+  make_inst(p, SEM_INST_RETURN, return_tok, p->unit->ty_void, 1, NULL);
   new_block(p);
   return true;
 }
@@ -660,8 +700,16 @@ static bool handle_function(parser_t* p) {
   lex(p);
 
   new_func(p, name);
+
+  push_state(p, state_complete_function());
   push_state(p, state_block());
 
+  return true;
+}
+
+static bool handle_complete_function(parser_t* p) {
+  p->cur_func->definers = vec_bake(p->arena, p->definers);
+  p->definers = NULL;
   return true;
 }
 
@@ -768,7 +816,50 @@ static bool handle_local_decl(parser_t* p) {
     return false;
   }
 
-  make_inst(p, SEM_INST_ALLOCA, ty[0], true, 0, NULL);
+  char buffer[256];
+  char* c = buffer;
+
+  #define PUT(x) \
+    do { \
+      if(c == (buffer + ARRAY_LENGTH(buffer))) { \
+        error(p, ty[0], "type name too long (maximum is %d)", (int)ARRAY_LENGTH(buffer)-1); \
+        return false; \
+      } \
+      *(c++) = x; \
+    } while (false)
+
+  for (int i = 0; i < ty_len; ++i) {
+    token_t tok = ty[i];
+    if (i > 0) {
+      PUT(' ');
+    }
+    for (int j = 0; j < tok.length; ++j) {
+      PUT(tok.start[j]);
+    }
+  }
+
+  string_view_t ty_name = {
+    .len = c-buffer,
+    .str = buffer
+  };
+
+  PUT('\0');
+
+  #undef PUT
+
+  sem_type_t* type = sem_find_type(&p->unit->type_table, ty_name);
+
+  if (!type) {
+    error(p, ty[0], "invalid type");
+    return false;
+  }
+
+  if (type == p->unit->ty_void) {
+    error(p, ty[0], "can't instantiate void type");
+    return false;
+  }
+
+  make_inst(p, SEM_INST_ALLOCA, ty[0], type, 0, NULL);
   sem_value_t value = pop_value(p);
 
   scope_insert(p, name, value);
@@ -776,13 +867,61 @@ static bool handle_local_decl(parser_t* p) {
   return true;
 }
 
+static void add_alias(arena_t* arena, sem_unit_t* unit, char* name, sem_type_t* alias) {
+  while (alias->alias != alias) {
+    alias = alias->alias;
+  }
+
+  sem_type_t* ty = sem_new_type(arena, &unit->type_table, name, alias->flags, alias->size);
+  ty->alias = alias;
+}
+
+static void init_primitive_types(arena_t* arena, sem_unit_t* unit) {
+  unit->ty_void = sem_new_type(arena, &unit->type_table, "void", SEM_TYPE_FLAG_NONE, 0);
+
+  unit->ty_short = sem_new_type(arena, &unit->type_table, "short", SEM_TYPE_FLAG_SIGNED, 2);
+  unit->ty_int = sem_new_type(arena, &unit->type_table, "int", SEM_TYPE_FLAG_SIGNED, 4);
+  unit->ty_long = sem_new_type(arena, &unit->type_table, "long", SEM_TYPE_FLAG_SIGNED, 4);
+  unit->ty_long_long = sem_new_type(arena, &unit->type_table, "long long", SEM_TYPE_FLAG_SIGNED, 4);
+
+  unit->ty_char = sem_new_type(arena, &unit->type_table, "char", SEM_TYPE_FLAG_SIGNED, 1);
+  unit->ty_signed_char = sem_new_type(arena, &unit->type_table, "signed char", SEM_TYPE_FLAG_SIGNED, 1);
+  unit->ty_unsigned_char = sem_new_type(arena, &unit->type_table, "unsigned char", SEM_TYPE_FLAG_NONE, 1);
+
+  unit->ty_unsigned_short = sem_new_type(arena, &unit->type_table, "unsigned short", SEM_TYPE_FLAG_NONE, 2);
+  unit->ty_unsigned_int = sem_new_type(arena, &unit->type_table, "unsigned int", SEM_TYPE_FLAG_NONE, 4);
+  unit->ty_unsigned_long = sem_new_type(arena, &unit->type_table, "unsigned long", SEM_TYPE_FLAG_NONE, 4);
+  unit->ty_unsigned_long_long = sem_new_type(arena, &unit->type_table, "unsigned long long", SEM_TYPE_FLAG_NONE, 8);
+
+  add_alias(arena, unit, "short int", unit->ty_short);
+  add_alias(arena, unit, "long int", unit->ty_long);
+  add_alias(arena, unit, "long long int", unit->ty_long_long);
+
+  add_alias(arena, unit, "signed", unit->ty_int);
+  add_alias(arena, unit, "signed int", unit->ty_int);
+  add_alias(arena, unit, "signed short", unit->ty_short);
+  add_alias(arena, unit, "signed short int", unit->ty_short);
+  add_alias(arena, unit, "signed long", unit->ty_long);
+  add_alias(arena, unit, "signed long int", unit->ty_long);
+  add_alias(arena, unit, "signed long long", unit->ty_long_long);
+  add_alias(arena, unit, "signed long long int", unit->ty_long_long);
+
+  add_alias(arena, unit, "unsigned", unit->ty_unsigned_int);
+  add_alias(arena, unit, "unsigned short int", unit->ty_unsigned_short);
+  add_alias(arena, unit, "unsigned long int", unit->ty_unsigned_long);
+  add_alias(arena, unit, "unsigned long long int", unit->ty_unsigned_long_long);
+}
+
 sem_unit_t* parse_unit(arena_t* arena, lexer_t* lexer) {
   sem_unit_t* return_value = NULL;
+
+  sem_unit_t* unit = arena_type(arena, sem_unit_t);
+  init_primitive_types(arena, unit);
 
   parser_t p = {
     .arena = arena,
     .lexer = lexer,
-    .unit = arena_type(arena, sem_unit_t),
+    .unit = unit,
   };
 
   vec_put(p.state_stack, state_top_level());

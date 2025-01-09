@@ -1,4 +1,9 @@
+#include <stdlib.h>
+#include <string.h>
+
 #include "front.h"
+
+#define MAX_TYPE_TABLE_LOAD_FACTOR 0.5f
 
 int sem_assign_block_temp_ids(sem_block_t* head) {
   int block_count = 0;
@@ -10,7 +15,7 @@ int sem_assign_block_temp_ids(sem_block_t* head) {
   return block_count;
 }
 
-static void dump_block(FILE* stream, sem_block_t* b) {
+static void dump_block(FILE* stream, sem_func_t* func, sem_block_t* b) {
   for (int i = 0; i < vec_len(b->code); ++i) {
     sem_inst_t* inst = b->code + i;
 
@@ -21,7 +26,7 @@ static void dump_block(FILE* stream, sem_block_t* b) {
     fprintf(stream, "  ");
 
     if (inst->out) {
-      fprintf(stream, "_%u = ", inst->out);
+      fprintf(stream, "_%u: %s = ", inst->out, func->definers[inst->out].ty->name.str);
     }
 
     fprintf(stream, "%s ", sem_inst_kind_label[inst->kind]);
@@ -60,7 +65,7 @@ static void dump_func(FILE* stream, sem_func_t* func) {
 
   foreach_list(sem_block_t, b, func->cfg) {
     fprintf(stream, "bb_%d:\n", b->temp_id);
-    dump_block(stream, b);
+    dump_block(stream, func, b);
     fprintf(stream, "\n");
   }
 
@@ -145,4 +150,91 @@ bool sem_analyze(char* path, char* source, sem_func_t* func) {
   scratch_release(&scratch);
 
   return success;
+}
+
+static int type_table_find(sem_type_table_t* table, string_view_t name) {
+  assert(table->capacity);
+
+  int i = fnv1a(name.str, name.len * sizeof(name.str[0])) % table->capacity;
+
+  for (int j = 0; j < table->capacity; ++j) {
+    if (!table->table[i]) {
+      return i;
+    }
+
+    if (string_view_cmp(table->table[i]->name, name)) {
+      return i;
+    }
+
+    i = (i+1) % table->capacity;
+  }
+
+  return -1;
+}
+
+sem_type_t* sem_new_type(arena_t* arena, sem_type_table_t* table, char* name, sem_type_flags_t flags, int size) {
+  if (!table->capacity || (float)table->count > (float)table->capacity * MAX_TYPE_TABLE_LOAD_FACTOR) {
+    int new_cap = table->capacity ? table->capacity * 2 : 8;
+
+    sem_type_table_t new_table = {
+      .capacity = new_cap,
+      .table = calloc(new_cap, sizeof(table->table[0]))
+    };
+
+    for (int i = 0; i < table->capacity; ++i) {
+      sem_type_t* x = table->table[i];
+
+      if (x) {
+        int j = type_table_find(&new_table, x->name);
+        assert(j != -1);
+        new_table.table[j] = x;
+        new_table.count++;
+      }
+    }
+
+    sem_free_type_table(table);
+    *table = new_table;
+  }
+
+  size_t name_len = strlen(name);
+
+  string_view_t name_str = {
+    .len = name_len,
+    .str = arena_push(arena, (name_len + 1) * sizeof(char))
+  };
+
+  memcpy(name_str.str, name, name_len * sizeof(char));
+  name_str.str[name_len] = '\0';
+
+  int i = type_table_find(table, name_str);
+  assert(i != -1 && table->table[i] == NULL);
+
+  sem_type_t* ty = arena_type(arena, sem_type_t);
+  ty->name = name_str;
+  ty->flags = flags;
+  ty->alias = ty;
+  ty->size = size;
+
+  table->table[i] = ty;
+  table->count++;
+
+  return ty;
+}
+
+sem_type_t* sem_find_type(sem_type_table_t* table, string_view_t name) {
+  int idx = type_table_find(table, name);
+
+  if (idx == -1) {
+    return NULL;
+  }
+
+  return table->table[idx];
+}
+
+void sem_free_type_table(sem_type_table_t* table) {
+  free(table->table);
+}
+
+void sem_free_unit(sem_unit_t* unit) {
+  sem_free_type_table(&unit->type_table);
 }

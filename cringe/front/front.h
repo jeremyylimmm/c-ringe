@@ -58,6 +58,25 @@ typedef enum {
   SEM_BLOCK_FLAG_CONTAINS_USER_CODE = BIT(0)
 } sem_block_flags_t;
 
+typedef enum {
+  SEM_TYPE_FLAG_NONE = 0,
+  SEM_TYPE_FLAG_SIGNED = BIT(0)
+} sem_type_flags_t;
+
+typedef struct sem_type_t sem_type_t;
+struct sem_type_t {
+  string_view_t name;
+  int size;
+  sem_type_flags_t flags;
+  sem_type_t* alias;
+};
+
+typedef struct {
+  int capacity;
+  int count;
+  sem_type_t** table;
+} sem_type_table_t;
+
 typedef struct {
   sem_inst_kind_t kind;
   sem_inst_flags_t flags;
@@ -83,6 +102,12 @@ struct sem_block_t {
   vec_t(sem_inst_t) code;
 };
 
+typedef struct {
+  sem_block_t* block;
+  int inst;
+  sem_type_t* ty;
+} sem_definer_t;
+
 struct sem_func_t {
   char* name;
   sem_func_t* next;
@@ -90,10 +115,28 @@ struct sem_func_t {
   sem_block_t* cfg;
 
   sem_value_t next_value;
+  sem_definer_t* definers;
 };
 
 typedef struct {
+  sem_type_table_t type_table;
   sem_func_t* funcs;
+
+  sem_type_t* ty_void;
+
+  sem_type_t* ty_short;
+  sem_type_t* ty_int;
+  sem_type_t* ty_long;
+  sem_type_t* ty_long_long;
+  
+  sem_type_t* ty_char;
+  sem_type_t* ty_signed_char;
+  sem_type_t* ty_unsigned_char;
+
+  sem_type_t* ty_unsigned_short;
+  sem_type_t* ty_unsigned_int;
+  sem_type_t* ty_unsigned_long;
+  sem_type_t* ty_unsigned_long_long;
 } sem_unit_t;
 
 typedef struct {
@@ -119,3 +162,10 @@ sem_successors_t sem_compute_successors(sem_block_t* block);
 bool sem_analyze(char* path, char* source, sem_func_t* func);
 
 cb_func_t* sem_lower(arena_t* arena, sem_func_t* sem_func);
+
+sem_type_t* sem_new_type(arena_t* arena, sem_type_table_t* table, char* name, sem_type_flags_t flags, int size);
+sem_type_t* sem_find_type(sem_type_table_t* table, string_view_t name);
+
+void sem_free_type_table(sem_type_table_t* table);
+
+void sem_free_unit(sem_unit_t* unit);

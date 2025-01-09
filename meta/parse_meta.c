@@ -67,12 +67,12 @@ int main(int argc, char** argv) {
   state_t* complete = state("complete");
   param(complete, "sem_inst_kind_t", "kind");
   param(complete, "token_t", "token");
-  param(complete, "bool", "has_out");
+  param(complete, "sem_type_t*", "ty");
   param(complete, "int", "num_ins");
   param(complete, "void*", "data");
 
-  state_t* complete_assign = state("complete_assign");
-  param(complete_assign, "token_t", "op");
+  state_t* complete_binary = state("complete_binary");
+  param(complete_binary, "token_t", "op");
 
   state("block");
   state_t* block_stmt = state("block_stmt");
@@ -116,6 +116,8 @@ int main(int argc, char** argv) {
   state("local_decl");
 
   state("function");
+  state("complete_function");
+
   state("top_level");
 
   char* output_path = argv[1];
