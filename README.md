@@ -9,10 +9,12 @@ Cringe is a no-library work-in-progress compiler written in C, featuring a modul
 ## Features
 
 - **Shift-Based DFA Lexer**: A custom lexer that uses a shift-based DFA approach for tokenization.
-- **Handwritten Parser**: No parser generators; all logic is implemented manually for full control and transparency. Only a very small subset of C is parsed for now.
+- **Handwritten Parser**: No parser generators; This is a recursive descent parser implemented as a state-machine with a manually allocated stack, so there is no risk of stack-overflow and error handling is simple. Only a very small subset of C is parsed for now.
 - **Modular Design**: Clear separation between front-end (lexing, parsing, semantic analysis) and back-end (code generation, optimization).
 - **Optimizing Backend**: Uses a sea-of-nodes SSA intermediate representation (IR) for optimization.
 - **x64 Code Generation**: For now, displays generated assembly code for x64 architecture. Only naive register allocation and spilling has been implemented.
+
+- **Build-time Meta-programs**: The lexer and code-generator use meta-programs and domain specific languages to automate the generation of code at compiler build time. This allows for a more declarative approach to defining the compiler's behavior. A meta program generates and encodes the DFA table used by the tokenizer. A descriptor specifies global instruction selection tiling, instruction format and code emission for the backend.
 
 ## Project Structure
 
