@@ -15,7 +15,7 @@ Cringe is a no-library work-in-progress compiler written in C, featuring a modul
 
 - **Build-time Meta-programs**: The lexer and code-generator use meta-programs and domain specific languages to automate the generation of code at compiler build time. This allows for a more declarative approach to defining the compiler's behavior. A meta program generates and encodes the DFA table used by the tokenizer. A descriptor specifies global instruction selection tiling, instruction format and code emission for the backend.
 
-- **Optimizing backend**: Right now, the backend includes a naive graph-coloring register allocator and a few peephole and global optimizations. This includes load-forwarding, dead-code/control-flow elimination, load-forwarding and dead-store elimination. For now the backend performs a naive global instruction selection before global scheduling, where it effectively provides loop-invariant code motion.
+- **Optimizing backend**: Right now, the backend includes a naive graph-coloring register allocator and a few peephole and global optimizations. This includes load-forwarding, dead-code/control-flow elimination, common sub-expression elimination through global value numbering, load-forwarding and dead-store elimination. For now the backend performs a naive global instruction selection before global scheduling, where it effectively provides loop-invariant code motion.
 
 ## Project Structure
 
